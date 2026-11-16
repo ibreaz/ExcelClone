@@ -14,6 +14,7 @@
   const ROW_HEADER_WIDTH = 44;
   const DEFAULT_COL_WIDTH = 96;
   const MIN_COL_WIDTH = 24;
+  const FILL_HANDLE_SIZE = 8;
   const EMPTY_SHEET = '[]';
 
   const byId = (id) => document.getElementById(id);
@@ -23,6 +24,7 @@
   const formulaBar = byId('formula-bar');
   const toolbar = byId('toolbar');
   const numberFormat = byId('number-format');
+  const fillHandle = byId('fill-handle');
 
   const sheet = new Sheet();
   const cellElements = []; // [row][col]
@@ -33,6 +35,7 @@
   let marked = [];
   let dragging = false;
   let editing = false;
+  let filling = null; // the selection the fill handle is being dragged from, as bounds
   let replacing = false; // the edit was started by typing over the cell, not by F2 or a double-click
   let copied = null; // the last copy made here: { text, col, row, rows }
   const undoStack = [];
@@ -180,8 +183,17 @@
     cellElements[anchor.row][anchor.col].classList.add('active');
     byId('name-box').value = activeKey();
     formulaBar.value = sheet.raw(activeKey());
+    placeFillHandle();
     renderToolbar();
     renderStatus(cells);
+  }
+
+  /** The fill handle sits on the bottom-right corner of the selection. */
+  function placeFillHandle() {
+    const { col2, row2 } = selectionBounds();
+    const corner = cellElements[row2][col2];
+    fillHandle.style.left = corner.offsetLeft + corner.offsetWidth - FILL_HANDLE_SIZE / 2 + 'px';
+    fillHandle.style.top = corner.offsetTop + corner.offsetHeight - FILL_HANDLE_SIZE / 2 + 'px';
   }
 
   function renderToolbar() {
@@ -328,8 +340,7 @@
 
   // ---------- clipboard ----------
 
-  function copySelection() {
-    const { col1, col2, row1, row2 } = selectionBounds();
+  function copyBlock({ col1, col2, row1, row2 } = selectionBounds()) {
     const rows = [];
     for (let row = row1; row <= row2; row++) {
       rows.push([]);
@@ -344,7 +355,7 @@
 
   function onCopy(event) {
     if (document.activeElement !== grid) return;
-    copied = copySelection();
+    copied = copyBlock();
     event.clipboardData.setData('text/plain', copied.text);
     event.preventDefault();
     if (event.type === 'cut') forSelection((key) => sheet.setRaw(key, ''));
@@ -373,18 +384,48 @@
     const isOwnCopy = copied !== null && copied.text === text;
     const rows = isOwnCopy ? copied.rows : rowsOfText(text);
     const { col1, col2, row1, row2 } = selectionBounds();
-    const height = Math.max(rows.length, row2 - row1 + 1);
-    const width = Math.max(rows[0].length, col2 - col1 + 1);
-    mutate(() => {
-      for (let r = 0; r < height; r++) {
-        for (let c = 0; c < width; c++) {
-          const sourceRow = r % rows.length;
-          const sourceCol = c % rows[sourceRow].length;
-          const from = isOwnCopy ? { col: copied.col + sourceCol, row: copied.row + sourceRow } : null;
-          pasteCell(rows[sourceRow][sourceCol], from, { col: col1 + c, row: row1 + r });
-        }
+    const target = { col1, row1, col2: Math.max(col2, col1 + rows[0].length - 1), row2: Math.max(row2, row1 + rows.length - 1) };
+    mutate(() => tileBlock(rows, isOwnCopy ? copied : null, target));
+  }
+
+  /** Writes the rows of cells over the target bounds, repeating them when the target is larger. origin is where a copy made here came from. */
+  function tileBlock(rows, origin, target) {
+    for (let row = target.row1; row <= target.row2; row++) {
+      for (let col = target.col1; col <= target.col2; col++) {
+        const sourceRow = (row - target.row1) % rows.length;
+        const sourceCol = (col - target.col1) % rows[sourceRow].length;
+        const from = origin && { col: origin.col + sourceCol, row: origin.row + sourceRow };
+        pasteCell(rows[sourceRow][sourceCol], from, { col, row });
       }
-    });
+    }
+  }
+
+  // ---------- fill handle ----------
+
+  /** The bounds to fill when the handle is dragged to the cell: the source grown down or right, whichever is further. */
+  function fillTarget(source, cell) {
+    const down = cell.row - source.row2;
+    const right = cell.col - source.col2;
+    if (down <= 0 && right <= 0) return source;
+    return down >= right ? { ...source, row2: cell.row } : { ...source, col2: cell.col };
+  }
+
+  /** While dragging, the selection shows what will be filled. */
+  function showFillTarget(cell) {
+    const target = fillTarget(filling, cell);
+    anchor = { col: target.col1, row: target.row1 };
+    focus = { col: target.col2, row: target.row2 };
+    renderSelection();
+  }
+
+  function onFillEnd() {
+    if (!filling) return;
+    const source = filling;
+    filling = null;
+    const target = selectionBounds();
+    const isExtended = target.row2 !== source.row2 || target.col2 !== source.col2;
+    const block = copyBlock(source);
+    if (isExtended) mutate(() => tileBlock(block.rows, block, target));
   }
 
   // ---------- files ----------
@@ -478,8 +519,9 @@
   }
 
   function onMouseOver(event) {
-    const cell = dragging && cellAt(event);
-    if (cell) moveTo(cell.col, cell.row, true);
+    const cell = (dragging || filling) && cellAt(event);
+    if (!cell) return;
+    if (filling) showFillTarget(cell); else moveTo(cell.col, cell.row, true);
   }
 
   const SHORTCUTS = {
@@ -549,6 +591,11 @@
     grid.addEventListener('dblclick', (event) => { if (cellAt(event)) startEdit(); });
     grid.addEventListener('keydown', onGridKey);
     document.addEventListener('mouseup', () => { dragging = false; });
+    fillHandle.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      filling = selectionBounds();
+    });
+    document.addEventListener('mouseup', onFillEnd);
     table.tHead.addEventListener('mousedown', onResizeStart);
     table.tHead.addEventListener('dblclick', (event) => { if (resizerColumn(event) !== null) fitColumn(resizerColumn(event)); });
     document.addEventListener('mousemove', onResizeMove);

@@ -2,7 +2,7 @@
 (function (root) {
   'use strict';
 
-  const { ERRORS, FormulaError, parse, evaluate, refKey, parseRef, movedIndex, restructureRefs } = root.XL;
+  const { ERRORS, FormulaError, parse, evaluate, refKey, parseRef, movedIndex, restructureRefs, parseDate } = root.XL;
 
   class Sheet {
     constructor() {
@@ -20,8 +20,13 @@
       return this.cells.get(key)?.style ?? {};
     }
 
+    /** A typed date also gives the cell the matching date format, unless the cell already has a number format. */
     setRaw(key, raw) {
-      this.update(key, (cell) => { cell.raw = raw; });
+      const typedDate = parseDate(raw);
+      this.update(key, (cell) => {
+        cell.raw = raw;
+        if (typedDate && !cell.style.format) cell.style = { ...cell.style, format: typedDate.format };
+      });
     }
 
     /** Merges the patch into the cell style; a property set to undefined is removed. */
@@ -100,7 +105,8 @@
         return evaluate(parse(raw.slice(1)), (col, row) => this.lookup(col, row));
       }
       const text = raw.trim();
-      return text !== '' && !Number.isNaN(Number(text)) ? Number(text) : raw;
+      if (text !== '' && !Number.isNaN(Number(text))) return Number(text);
+      return parseDate(text)?.serial ?? raw;
     }
 
     lookup(col, row) {

@@ -33,8 +33,8 @@
     return { col: colIndex(match[1]), row: Number(match[2]) - 1 };
   }
 
-  // Groups: 1 number, 2 string, 3 cell reference, 4 name, 5 operator.
-  const TOKEN = /\s*(?:(\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+)|"((?:[^"]|"")*)"|(\$?[A-Za-z]{1,3}\$?\d+)(?![A-Za-z0-9_(])|([A-Za-z_][A-Za-z0-9_]*)|(<=|>=|<>|[-+*\/^&=<>(),;:%]))/y;
+  // Groups: 1 number, 2 string, 3 cell reference, 4 name, 5 operator, 6 the mark left by a deleted reference.
+  const TOKEN = /\s*(?:(\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+)|"((?:[^"]|"")*)"|(\$?[A-Za-z]{1,3}\$?\d+)(?![A-Za-z0-9_(])|([A-Za-z_][A-Za-z0-9_]*)|(<=|>=|<>|[-+*\/^&=<>(),;:%])|(#REF!))/y;
 
   function tokenize(text) {
     const source = text.trimEnd();
@@ -53,6 +53,7 @@
     if (match[2] !== undefined) return { type: 'string', value: match[2].replace(/""/g, '"') };
     if (match[3] !== undefined) return { type: 'ref', value: match[3] };
     if (match[4] !== undefined) return { type: 'name', value: match[4].toUpperCase() };
+    if (match[6] !== undefined) return { type: 'error', value: ERRORS.REF };
     return { type: 'op', value: match[5] };
   }
 
@@ -90,6 +91,7 @@
       if (token.type === 'number' || token.type === 'string') return literal(token.value);
       if (token.type === 'ref') return reference(token);
       if (token.type === 'name') return named(token.value);
+      if (token.type === 'error') return { type: 'error', code: token.value };
       if (token.value !== '(') fail();
       const inner = binary(0);
       expectOp(')');
@@ -130,9 +132,16 @@
     throw new FormulaError(ERRORS.VALUE);
   }
 
+  const SIGNIFICANT_DIGITS = 12;
+
+  /** A number as text without binary noise such as 0.1 + 0.2 = 0.30000000000000004. */
+  function plainNumber(value) {
+    return String(Number(value.toPrecision(SIGNIFICANT_DIGITS)));
+  }
+
   function toText(value) {
     if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE';
-    return String(value);
+    return typeof value === 'number' ? plainNumber(value) : String(value);
   }
 
   function compare(a, b) {
@@ -185,6 +194,70 @@
     return sum(numbers) / numbers.length;
   }
 
+  function toBoolean(value) {
+    return typeof value === 'boolean' ? value : toNumber(value) !== 0;
+  }
+
+  /** Conditions of AND/OR: range cells that hold text or nothing are skipped. */
+  function booleansOf(args) {
+    const isLogical = (value) => typeof value === 'boolean' || typeof value === 'number';
+    return args.flatMap((arg) => (Array.isArray(arg) ? arg.filter(isLogical) : [arg])).map(toBoolean);
+  }
+
+  const CRITERION = /^(<=|>=|<>|<|>|=)(.*)$/;
+
+  /** The test of a SUMIF/COUNTIF criterion such as 100, "Food", ">100" or "<>Food". Numbers match numbers, text matches text. */
+  function criterionTest(criterion) {
+    const [, operator = '=', operand = criterion] = (typeof criterion === 'string' && CRITERION.exec(criterion)) || [];
+    const isNumber = typeof operand === 'number' || (typeof operand === 'string' && operand.trim() !== '' && !Number.isNaN(Number(operand)));
+    const wanted = isNumber ? Number(operand) : toText(operand);
+    return (value) => typeof value === typeof wanted && BINARY[operator](value, wanted);
+  }
+
+  /** The cells of `results` whose cell at the same place in `range` meets the criterion. */
+  function matching(range, criterion, results) {
+    const isUsable = Array.isArray(range) && Array.isArray(results) && !Array.isArray(criterion) && range.length === results.length;
+    if (!isUsable) throw new FormulaError(ERRORS.VALUE);
+    const matches = criterionTest(criterion);
+    return results.filter((result, index) => matches(range[index]));
+  }
+
+  // A date is the number of days since 1970-01-01, so dates can be subtracted and days added.
+  const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+  function dateSerial(year, month, day) {
+    return Math.round(Date.UTC(year, month - 1, day) / MS_PER_DAY);
+  }
+
+  function dateParts(serial) {
+    const date = new Date(Math.floor(serial) * MS_PER_DAY);
+    return { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1, day: date.getUTCDate() };
+  }
+
+  function today() {
+    const now = new Date();
+    return dateSerial(now.getFullYear(), now.getMonth() + 1, now.getDate());
+  }
+
+  // How a date can be typed; `order` gives the pattern groups holding year, month, day.
+  const TYPED_DATES = [
+    { format: 'date', pattern: /^(\d{4})-(\d{1,2})-(\d{1,2})$/, order: [1, 2, 3] },
+    { format: 'date-dmy', pattern: /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/, order: [3, 2, 1] },
+  ];
+
+  /** A typed date as { serial, format }, or null when the text is not a date that exists. */
+  function parseDate(text) {
+    for (const { format, pattern, order } of TYPED_DATES) {
+      const match = pattern.exec(text.trim());
+      if (!match) continue;
+      const [year, month, day] = order.map((group) => Number(match[group]));
+      const serial = dateSerial(year, month, day);
+      const parts = dateParts(serial);
+      return parts.month === month && parts.day === day ? { serial, format } : null;
+    }
+    return null;
+  }
+
   const extreme = (pick, numbers) => (numbers.length === 0 ? 0 : pick(...numbers));
 
   const FUNCTIONS = {
@@ -195,6 +268,17 @@
     COUNT: (args) => numbersOf(args).length,
     ABS: (args) => Math.abs(toNumber(args[0])),
     ROUND: (args) => roundTo(toNumber(args[0]), toNumber(args[1] ?? 0)),
+    COUNTA: (args) => args.flat().filter((value) => value !== '').length,
+    AND: (args) => booleansOf(args).every(Boolean),
+    OR: (args) => booleansOf(args).some(Boolean),
+    NOT: (args) => !toBoolean(args[0]),
+    SUMIF: (args) => sum(matching(args[0], args[1], args[2] ?? args[0]).filter((value) => typeof value === 'number')),
+    COUNTIF: (args) => matching(args[0], args[1], args[0]).length,
+    TODAY: today,
+    DATE: (args) => dateSerial(toNumber(args[0]), toNumber(args[1]), toNumber(args[2])),
+    YEAR: (args) => dateParts(toNumber(args[0])).year,
+    MONTH: (args) => dateParts(toNumber(args[0])).month,
+    DAY: (args) => dateParts(toNumber(args[0])).day,
   };
 
   function rangeValues(range, getValue) {
@@ -216,6 +300,7 @@
     };
     switch (node.type) {
       case 'literal': return node.value;
+      case 'error': throw new FormulaError(node.code);
       case 'ref': return getValue(node.col, node.row);
       case 'range': return rangeValues(node, getValue);
       case 'negate': return -toNumber(scalar(node.operand));
@@ -229,16 +314,13 @@
     if (node.name === 'IF') return evaluateIf(node.args, scalar);
     const fn = FUNCTIONS[node.name];
     if (!fn) throw new FormulaError(ERRORS.NAME);
-    if (node.args.length === 0) throw new FormulaError(ERRORS.SYNTAX);
     return fn(node.args.map((arg) => evaluate(arg, getValue)));
   }
 
   /** Only the chosen branch is evaluated, so an error in the other one does not leak. */
   function evaluateIf(args, scalar) {
     if (args.length < 2 || args.length > 3) throw new FormulaError(ERRORS.SYNTAX);
-    const condition = scalar(args[0]);
-    const isTrue = typeof condition === 'boolean' ? condition : toNumber(condition) !== 0;
-    if (isTrue) return scalar(args[1]);
+    if (toBoolean(scalar(args[0]))) return scalar(args[1]);
     return args.length === 3 ? scalar(args[2]) : false;
   }
 
@@ -300,5 +382,6 @@
     });
   }
 
-  root.XL = Object.assign(root.XL || {}, { ERRORS, FormulaError, colName, refKey, parse, evaluate, roundTo, shiftRefs, parseRef, movedIndex, restructureRefs });
+  root.XL = Object.assign(root.XL || {}, { ERRORS, FormulaError, colName, refKey, parse, evaluate, roundTo, shiftRefs, parseRef, movedIndex, restructureRefs, parseDate, dateParts, plainNumber });
+  root.XL.FUNCTION_NAMES = ['IF', ...Object.keys(FUNCTIONS)];
 })(typeof window !== 'undefined' ? window : globalThis);

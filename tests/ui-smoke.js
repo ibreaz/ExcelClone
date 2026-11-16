@@ -53,6 +53,12 @@ function driver(window) {
       document.querySelector(selector).dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, ...extra }));
       document.dispatchEvent(new window.MouseEvent('mouseup', { bubbles: true }));
     },
+    /** Drags the fill handle of the selection to the given cell. */
+    fillTo(ref) {
+      document.getElementById('fill-handle').dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      this.cell(ref).dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }));
+      document.dispatchEvent(new window.MouseEvent('mouseup', { bubbles: true }));
+    },
     button: (id) => document.getElementById(id).click(),
     selected: () => document.querySelectorAll('td.sel').length,
     copy: () => clip('copy'),
@@ -160,6 +166,34 @@ const tests = {
     assert.strictEqual(ui.cell('A3').textContent, '1.00 €');
     ui.click('A3');
     assert.strictEqual(ui.value('formula-bar'), '=SUM(A1:A2)');
+  },
+  'dragging the fill handle down copies a formula with moved references': (ui) => {
+    ui.click('G1');
+    ui.type('5');
+    ui.type('=G1*2');
+    ui.click('G2');
+    ui.fillTo('G4');
+    assert.deepStrictEqual(['G3', 'G4'].map((ref) => ui.cell(ref).textContent), ['20', '40']);
+    assert.strictEqual(ui.selected(), 3);
+    ui.click('G4');
+    assert.strictEqual(ui.value('formula-bar'), '=G3*2');
+  },
+  'dragging the fill handle right repeats a selected block': (ui) => {
+    ui.click('G1');
+    ui.click('G2', { shiftKey: true });
+    ui.fillTo('I2');
+    assert.deepStrictEqual(['H1', 'H2', 'I1', 'I2'].map((ref) => ui.cell(ref).textContent), ['5', '10', '5', '10']);
+  },
+  'a typed date is shown as a date and can be counted with': (ui) => {
+    ui.click('K1');
+    ui.type('2026-01-31');
+    ui.type('01.03.2026');
+    ui.type('=K2-K1');
+    ui.type('=K1+1');
+    assert.deepStrictEqual(['K1', 'K2', 'K3', 'K4'].map((ref) => ui.cell(ref).textContent), ['2026-01-31', '01.03.2026', '29', '20485']);
+    ui.click('K4');
+    ui.choose('number-format', 'date-dmy');
+    assert.strictEqual(ui.cell('K4').textContent, '01.02.2026');
   },
 };
 

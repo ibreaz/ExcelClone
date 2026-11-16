@@ -31,6 +31,8 @@
       <option value="usd">$1,234.00</option>
       <option value="ron">1,234.00 lei</option>
       <option value="percent">12%</option>
+      <option value="date">2026-12-31</option>
+      <option value="date-dmy">31.12.2026</option>
     </select>
     <button data-decimals="1" title="More decimals">.00+</button>
     <button data-decimals="-1" title="Fewer decimals">.00&minus;</button>
@@ -52,6 +54,7 @@
   </div>
   <div id="grid" tabindex="0">
     <table id="sheet"></table>
+    <div id="fill-handle" title="Drag down or right to copy the selection"></div>
     <input id="editor" spellcheck="false" autocomplete="off">
   </div>
   <div class="bar" id="status"></div>
