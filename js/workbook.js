@@ -2,7 +2,7 @@
 (function (root) {
   'use strict';
 
-  const { Sheet, renameSheetRefs, isSheetName } = root.XL;
+  const { Sheet, renameSheetRefs, isSheetName, isRangeName, movedIndex } = root.XL;
 
   const DEFAULT_NAME = 'Sheet';
   const COPY_SUFFIX = ' copy';
@@ -11,6 +11,7 @@
   class Workbook {
     constructor() {
       this.entries = []; // { name, sheet }
+      this.named = new Map(); // lower-case name -> { name, sheet, from, to }: the cells a name stands for
       this.activeIndex = 0;
       this.add();
     }
@@ -62,9 +63,11 @@
       this.active.invalidate();
     }
 
-    /** Formulas that refer to a removed sheet show #REF!. */
+    /** Formulas that refer to a removed sheet show #REF!; the names of its cells go with it. */
     remove(index) {
       if (this.entries.length === 1) throw new Error('The last sheet cannot be deleted.');
+      const removed = this.entries[index].sheet;
+      this.allNames().filter((area) => area.sheet === removed).forEach((area) => this.deleteName(area.name));
       this.entries.splice(index, 1);
       this.activeIndex = Math.min(index, this.entries.length - 1);
       this.active.invalidate();
@@ -89,12 +92,50 @@
       this.activeIndex = index + 1;
     }
 
+    /** Gives a name to the cells from..to of a sheet; a name that exists moves to these cells. */
+    defineName(name, sheet, { from, to }) {
+      if (!isRangeName(name)) throw new Error('A name is one word of letters, digits and _ that does not look like a cell (A1) and is not TRUE or FALSE.');
+      this.named.set(name.toLowerCase(), { name, sheet, from: { ...from }, to: { ...to } });
+      this.active.invalidate();
+    }
+
+    deleteName(name) {
+      this.named.delete(name.toLowerCase());
+      this.active.invalidate();
+    }
+
+    /** All names in alphabetical order, each as { name, sheet, from, to } with sheet the Sheet itself. */
+    allNames() {
+      return [...this.named.values()].sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    /** The cells behind a name, with the sheet given by its name as formulas need it; undefined for an unknown name. */
+    areaNamed(name) {
+      const area = this.named.get(name.toLowerCase());
+      return area && { ...area, sheet: this.nameOf(area.sheet) };
+    }
+
+    nameOf(sheet) {
+      return this.entries.find((entry) => entry.sheet === sheet).name;
+    }
+
+    /** Names follow rows or columns inserted in or removed from their sheet; a name whose cells are all removed is dropped. */
+    moveNames(sheet, axis, at, count) {
+      for (const area of this.allNames().filter((candidate) => candidate.sheet === sheet)) {
+        const low = movedIndex(area.from[axis], at, count, 'low');
+        const high = movedIndex(area.to[axis], at, count, 'high');
+        if (low > high) this.named.delete(area.name.toLowerCase());
+        else Object.assign(area, { from: { ...area.from, [axis]: low }, to: { ...area.to, [axis]: high } });
+      }
+    }
+
     select(index) {
       this.activeIndex = index;
     }
 
     serialize() {
-      return JSON.stringify({ active: this.activeIndex, sheets: this.entries.map(({ name, sheet }) => ({ name, ...sheet.toData() })) });
+      const names = this.allNames().map((area) => ({ ...area, sheet: this.sheets.indexOf(area.sheet) }));
+      return JSON.stringify({ active: this.activeIndex, sheets: this.entries.map(({ name, sheet }) => ({ name, ...sheet.toData() })), names });
     }
 
     /** Also reads a save made before there were several sheets: it becomes the only sheet. */
@@ -108,6 +149,7 @@
         return { name, sheet };
       });
       this.entries = entries;
+      this.named = new Map((saved.names ?? []).map((area) => [area.name.toLowerCase(), { ...area, sheet: entries[area.sheet].sheet }]));
       this.activeIndex = Math.min(saved.active ?? 0, entries.length - 1);
     }
   }

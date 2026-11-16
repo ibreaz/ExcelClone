@@ -19,6 +19,8 @@ function pretendLayout(window) {
   });
 }
 
+const placeholderOf = (ui) => ui.cell('A1').ownerDocument.getElementById('formula-bar').placeholder;
+
 async function openPage() {
   const dom = await JSDOM.fromFile(path.join(__dirname, '..', 'index.html'), {
     runScripts: 'dangerously',
@@ -106,6 +108,14 @@ function driver(window) {
     openMenus: () => [...document.querySelectorAll('.menu.open .menu-title')].map((button) => button.textContent),
     toggle: (property) => document.querySelector(`[data-toggle="${property}"]`).click(),
     unprinted: () => document.querySelectorAll('.unprinted').length,
+    /** Types into the name box, left of the formula bar, and presses Enter. */
+    nameBox(text) {
+      const box = document.getElementById('name-box');
+      box.value = text;
+      key(box, 'Enter');
+    },
+    names: () => [...document.querySelectorAll('#name-list button')].map((item) => item.textContent),
+    pickName: (name) => document.querySelector(`#name-list button[data-name="${name}"]`).click(),
     button: (id) => document.getElementById(id).click(),
     selected: () => document.querySelectorAll('td.sel').length,
     copy: () => clip('copy'),
@@ -122,7 +132,7 @@ function driver(window) {
 
 const tests = {
   'a first start shows the demo workbook; File > New workbook empties it': (ui) => {
-    assert.deepStrictEqual(ui.tabs(), ['Features*', 'Summary 2026', 'Limits']);
+    assert.deepStrictEqual(ui.tabs(), ['Features*', 'Summary 2026', 'Tables', 'Limits']);
     assert.strictEqual(ui.cell('D9').textContent, '1,907.25 €');
     ui.answer(true);
     ui.button('new-sheet');
@@ -399,6 +409,72 @@ const tests = {
     assert.strictEqual(ui.cell('K3').textContent, '01.01.2027');
     ui.click('K3');
     assert.strictEqual(ui.value('formula-bar'), '=K1+1');
+  },
+  'typing a name in the name box names the selected cells, and formulas can use it': (ui) => {
+    ui.click('N1');
+    ui.type('10');
+    ui.type('20');
+    ui.click('N1');
+    ui.click('N2', { shiftKey: true });
+    ui.nameBox('Costs');
+    assert.strictEqual(ui.value('name-box'), 'Costs');
+    assert.deepStrictEqual(ui.names(), ['CostsN1:N2']);
+    assert.notStrictEqual(ui.cell('N1').style.boxShadow, '');
+    ui.click('N4');
+    assert.strictEqual(ui.value('name-box'), 'N4');
+    ui.type('=SUM(costs)');
+    assert.strictEqual(ui.cell('N4').textContent, '30');
+  },
+  'the name box and the Names menu go to a name or an address, also on another sheet': (ui) => {
+    ui.nameBox('costs');
+    assert.strictEqual(ui.selected(), 2);
+    ui.nameBox('b2:c4');
+    assert.deepStrictEqual([ui.selected(), ui.value('name-box')], [6, 'B2']);
+    ui.showSheet('Year');
+    assert.deepStrictEqual(ui.names(), ["Costs'Year 2026'!N1:N2".replace("'Year 2026'", 'Sheet2')]);
+    ui.pickName('Costs');
+    assert.deepStrictEqual([ui.tabs().find((tab) => tab.endsWith('*')), ui.value('name-box')], ['Sheet2*', 'Costs']);
+    ui.nameBox('bad name');
+    assert.match(ui.lastAlert(), /one word/);
+  },
+  'a name is removed from the Names menu, and formulas that used it say so': (ui) => {
+    ui.pickName('Costs');
+    ui.button('delete-name');
+    assert.deepStrictEqual(ui.names(), []);
+    assert.strictEqual(ui.cell('N4').textContent, '#NAME?');
+    assert.strictEqual(ui.cell('N1').style.boxShadow, '');
+    ui.press('z', { ctrlKey: true });
+    assert.strictEqual(ui.cell('N4').textContent, '30');
+  },
+  'a TSV file opens as a new sheet with its formulas working': async (ui) => {
+    await ui.open('budget.tsv', 'Item\tNet\tGross\nDesk\t100\t=B2*1.19\nTotal\t=SUM(B2:B2)\t=SUM(C2:C2)\n');
+    assert.strictEqual(ui.tabs().find((tab) => tab.endsWith('*')), 'budget*');
+    assert.deepStrictEqual(['C2', 'B3', 'C3'].map((ref) => ui.cell(ref).textContent), ['119', '100', '119']);
+  },
+  'a query over a table on the sheet shows its result in the cells below, and says why when it cannot': (ui) => {
+    ui.button('menu-add-sheet');
+    [['item', 'price'], ['pen', '2'], ['desk', '150']].forEach(([item, price], row) => {
+      ui.click('A' + (row + 1));
+      ui.typeThen(item, 'Tab');
+      ui.type(price);
+    });
+    ui.click('D1');
+    ui.type('=SQL("select item from A1:B3 where price > 10")');
+    assert.deepStrictEqual(['D1', 'D2'].map((ref) => ui.cell(ref).textContent), ['item', 'desk']);
+    assert.deepStrictEqual(['D1', 'D2', 'D3', 'A1'].map((ref) => ui.cell(ref).className.match(/query\S*/)?.[0]), ['query', 'query-result', undefined, undefined]);
+    ui.click('D2');
+    assert.match(ui.cell('D2').title, /query in D1/);
+    assert.match(placeholderOf(ui), /query in D1/);
+    ui.press('F2');
+    assert.strictEqual(ui.value('name-box'), 'D1');
+    assert.match(ui.value('editor'), /^=SQL/);
+    ui.typeThen(ui.value('editor'), 'Escape');
+    ui.click('D2');
+    ui.type('mine');
+    assert.deepStrictEqual([ui.cell('D1').textContent, ui.cell('D1').title], ['#SPILL!', 'The result needs cells that are not empty']);
+    ui.click('D1');
+    ui.type('=SQL("select colour from A1:B3")');
+    assert.match(ui.cell('D1').title, /no column "colour"/);
   },
 };
 

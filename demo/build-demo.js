@@ -108,6 +108,16 @@ const SECTIONS = [
     ['Negative number in red', '-250', { negativeRed: true, format: 'eur' }],
     ['The same format on a positive number', '250', { negativeRed: true, format: 'eur' }],
   ]],
+  ['Names (type a name in the box left of fx to name the selected cells)', [
+    ['A name for a range: Amounts is D4:D8', '=SUM(Amounts)', MONEY],
+    ['A name for one cell: Balance is D9', '=Balance*19%', MONEY],
+  ]],
+  ['Queries (more on the Tables sheet)', [
+    ['SQL over an area; the result fills the cells below', '=SQL("select Category, sum(Amount) as Total from A3:D8 group by Category order by Total")'],
+    ['', ''],
+    ['', ''],
+    ['', ''],
+  ]],
   ['Several sheets (tabs at the bottom)', [
     [`A cell of another sheet: '${SUMMARY}'!B3`, `='${SUMMARY}'!B3`, MONEY],
     ['A range of another sheet', `=SUM('${SUMMARY}'!B4:B5)`, MONEY],
@@ -119,6 +129,8 @@ const SECTIONS = [
     [ERROR_LABEL + 'formula that cannot be read', '=1+'],
     [ERROR_LABEL + 'formula that refers to itself', (row) => '=B' + row + '+1'],
     [ERROR_LABEL + 'reference to a deleted cell', '=#REF!+1'],
+    [ERROR_LABEL + 'query that cannot be run (hover the cell to read why)', '=SQL("select Price from A3:D8")'],
+    [ERROR_LABEL + 'query result with a filled cell in its way', '=SQL("select Date, Amount from A3:D8")', undefined, 'in the way'],
   ]],
   ['Try it yourself', [
     ['Select D9 and drag the small square at its corner to the right: the formula is copied'],
@@ -132,11 +144,15 @@ const SECTIONS = [
     ['Print preview (Ctrl+P): row 1 is on every page and page 2 starts at Number formats (dashed line)'],
     ['The other sheets print sideways (see their Print menu); File > New workbook starts empty'],
     ['File > Open file, pick demo/sample.csv: it arrives as a new sheet'],
+    ['File > Export this sheet as TSV keeps the formulas; open the .tsv again and they still work'],
+    ['Copy cells here and paste them into a text editor: tab separated text with the formulas'],
+    ['Select D4:D8: the box left of fx says Amounts. Type B7 or a name there to go to it'],
     ['Print: only the used part of the sheet is printed, without the grid'],
   ]],
 ];
 
 const LIMITS = 'Limits';
+const TABLES = 'Tables';
 // Every known limit, as [area, limit]. Keep it current: it is the one list of limits (README and TODO point here).
 const LIMIT_ROWS = [
   ['Size', 'Each sheet has 26 columns (A-Z) and 100 rows. Cells pushed past the edge by an insert are hidden, not lost.'],
@@ -144,7 +160,14 @@ const LIMIT_ROWS = [
   ['Typing', 'Numbers use . for decimals and no thousands separator: 1234.5, not 1.234,5. Type =10% for a percentage.'],
   ['Typing', 'Dates are typed as 2026-12-31 or 31.12.2026 only. There are no times of day.'],
   ['Typing', 'References to another sheet are typed (Sheet2!A1); they cannot be picked with the mouse.'],
-  ['Formulas', 'Only the functions shown on the Features sheet. No text functions, no lookups.'],
+  ['Formulas', 'Only the functions shown on the Features sheet. No text functions, no lookups (a query with JOIN does that job).'],
+  ['Names', 'A name is one word and belongs to the whole workbook. Names do not move when their cells are cut and pasted elsewhere.'],
+  ['Queries', 'SELECT only: columns, expressions, AS, DISTINCT, JOIN ... ON (inner), WHERE, GROUP BY, ORDER BY, LIMIT; SUM COUNT AVG MIN MAX.'],
+  ['Queries', 'No LEFT JOIN, HAVING, subqueries, UNION, IN, BETWEEN, or text and date functions.'],
+  ['Queries', 'The first row of a table is its column names. A name with a space is written [like this].'],
+  ['Queries', 'The cell must hold only the query: =SQL(...) cannot be part of a bigger formula.'],
+  ['Queries', 'A query can read the result of a query entered before it, not of one entered after it.'],
+  ['Queries', 'Every change reruns every query; fine for tables of a few hundred rows.'],
   ['Formulas', 'SUMIF and COUNTIF have no wildcards (* and ?).'],
   ['Formulas', 'A formula gets its date format when it is entered; if the cells it uses become dates later, pick the format by hand.'],
   ['Formulas', 'Every change recalculates the whole workbook: fine at this size.'],
@@ -155,6 +178,7 @@ const LIMIT_ROWS = [
   ['Sheets', "A sheet name cannot contain ' ! or \"."],
   ['Clipboard', 'Copy puts formulas, not results, on the system clipboard. Paste from another program brings text only.'],
   ['Files', 'Saves to this browser and to .json files. No .xlsx. CSV numbers with decimal commas arrive as text.'],
+  ['Files', 'TSV keeps formulas but no formatting, names or column widths, and holds one sheet.'],
   ['Print', 'Paper size and margins are chosen in the print dialog of the browser. Landscape is a hint that some browsers ignore.'],
   ['Print', 'Only row 1 can repeat on every page.'],
   ['Undo', 'The last 100 steps, forgotten when the page is reloaded.'],
@@ -203,6 +227,7 @@ function build() {
   book.rename(0, FEATURES);
   buildFeatures(book.active);
   buildSummary(book.add(SUMMARY));
+  buildTables(book.add(TABLES));
   buildLimits(book.add(LIMITS));
   book.select(0);
   return book.serialize();
@@ -226,14 +251,64 @@ function buildFeatures(sheet) {
     row += 2;
     headingRow(row, [title]);
     if (title === PAGE_BREAK_AT) sheet.togglePageBreak(row - 1);
-    for (const [label, content = '', style] of demos) {
+    for (const [label, content = '', style, beside = ''] of demos) {
       row += 1;
       put('A' + row, label);
+      put('C' + row, beside);
       put('B' + row, typeof content === 'function' ? content(row) : content, style);
     }
   }
   COLUMN_WIDTHS.forEach((width, col) => sheet.setColWidth(col, width));
   sheet.setPrintOption('repeatHeader', true);
+  sheet.book.defineName('Amounts', sheet, { from: { col: 3, row: 3 }, to: { col: 3, row: 7 } });
+  sheet.book.defineName('Balance', sheet, { from: { col: 3, row: 8 }, to: { col: 3, row: 8 } });
+}
+
+const CLIENTS = [['id', 'client'], ['1', 'Acme'], ['2', 'Borealis'], ['3', 'Cetus']];
+const ORDERS = [
+  ['nr', 'client_id', 'date', 'amount'],
+  ['1001', '1', '2026-01-05', '1200'],
+  ['1002', '2', '2026-01-09', '450'],
+  ['1003', '1', '2026-01-17', '300'],
+  ['1004', '3', '2026-02-02', '980'],
+  ['1005', '2', '2026-02-11', '150'],
+  ['1006', '1', '2026-02-20', '640'],
+];
+const ORDERS_ROOM = 7; // the Orders name covers empty rows too, so new orders typed below are part of the table
+const TABLE_TOP = 3; // row of the column names
+// [cell, what it shows, the query]
+const QUERIES = [
+  ['A13', 'Total per client: two tables joined, grouped and ordered',
+    '=SQL("select client, count(*) as orders, sum(amount) as total from Orders o join Clients c on o.client_id = c.id group by client order by total desc")'],
+  ['E13', 'Orders from the date in H13 on, largest first (? takes the value after the query)',
+    '=SQL("select nr, date, amount from Orders where date >= ? order by amount desc", H13)'],
+  ['A20', 'A query over an area instead of a name',
+    '=SQL("select count(*) as orders, max(amount) as largest, avg(amount) as average from D3:G9")'],
+  ['E20', 'Clients whose name has an e, with LIKE',
+    `=SQL("select client from Clients where client like '%e%' order by client")`],
+];
+
+function buildTables(sheet) {
+  const put = putter(sheet);
+  const table = (rows, firstColumn, columnStyle = {}) => rows.forEach((cells, line) => cells.forEach((raw, i) => {
+    const column = String.fromCharCode(firstColumn.charCodeAt(0) + i);
+    put(column + (TABLE_TOP + line), raw, line === 0 ? HEADING : columnStyle[cells.length - 1 === i ? 'last' : 'other']);
+  }));
+  put('A1', 'Two tables on one sheet, and live queries over them (violet; the darker cell holds the query): change a number, add an order in row 10', { bold: true });
+  put('A2', 'Clients (named Clients)', { italic: true });
+  put('D2', 'Orders (named Orders)', { italic: true });
+  table(CLIENTS, 'A');
+  table(ORDERS, 'D', { last: MONEY });
+  sheet.book.defineName('Clients', sheet, { from: { col: 0, row: TABLE_TOP - 1 }, to: { col: 1, row: TABLE_TOP + CLIENTS.length - 2 } });
+  sheet.book.defineName('Orders', sheet, { from: { col: 3, row: TABLE_TOP - 1 }, to: { col: 6, row: TABLE_TOP + ORDERS_ROOM } });
+  put('G13', 'From:', { align: 'right' });
+  put('H13', '2026-01-15', { fill: '#fff2a8' });
+  QUERIES.forEach(([cell, title, query]) => {
+    const row = Number(cell.slice(1));
+    put(cell[0] + (row - 1), title, { bold: true });
+    put(cell[0] + (row + 1), query);
+  });
+  sheet.setColWidth(0, 130);
 }
 
 /** The demo as a script that hands the workbook text to the page. */

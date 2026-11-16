@@ -1,6 +1,6 @@
 # ExcelClone - TODO
 
-Batches H1-H3, K1-K13 and text overflow are done (see `README.md`). It was checked in a real headless Chromium (README -> How it is tested -> I3). Next are the batches below, most useful for accounting first. Each one is small and leaves the page working.
+Batches H1-H3, K1-K13, text overflow and W1-W3 (TSV with formulas, names, SQL queries) are done (see `README.md`). It was checked in a real headless Chromium (README -> How it is tested -> I3). Next are the batches below, most useful for accounting first. Each one is small and leaves the page working.
 
 ## Check first
 
@@ -27,7 +27,7 @@ Rule for every batch: add a demo of the new feature to `demo/build-demo.js`, bri
 - [x] K12 - sheet names with spaces; reorder tabs; copy a sheet.
 - [x] K13 - print options: page breaks, repeat row 1, landscape.
 
-Nothing else is planned. Candidates, if wanted: wrap text and row heights, sorting, freeze the header row, find and replace, more functions (text, lookups).
+Nothing else is planned. Candidates, if wanted: for queries LEFT JOIN, HAVING, IN/BETWEEN and text functions; a panel that lists and edits names; wrap text and row heights, sorting, freeze the header row, find and replace, more functions (text, lookups).
 
 ## Known limits
 

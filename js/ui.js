@@ -3,6 +3,7 @@
   'use strict';
 
   const { Workbook, FormulaError, colName, refKey, formatValue, shiftRefs, parseCsv, csvLine, seriesOf, DEFAULT_DECIMALS, BORDER_SIDES, DEMO } = window.XL;
+  const { parseArea, areaText, sheetPrefix, parseRef } = window.XL;
 
   const ROWS = 100;
   const COLS = 26;
@@ -16,7 +17,10 @@
   const MIN_COL_WIDTH = 24;
   const FILL_HANDLE_SIZE = 8;
   const EMPTY_BOOK = '[]'; // a save without cells opens as one empty sheet
-  const CSV_FILE = /\.csv$/i;
+  const TABLE_FILE = /\.(csv|tsv)$/i; // files that arrive as a new sheet
+  const NAME_OUTLINE = '#6aa9c4';
+  const QUERY_OUTLINE = '#8a63d2';
+  const QUERY_BAR = `inset 4px 0 0 0 ${QUERY_OUTLINE}`; // a bar on the left of the cell that holds the query
   const CELL_PADDING = 4; // as in style.css
   const NEGATIVE_COLOR = '#c00000';
   const BORDER_LINE = '1px solid #222';
@@ -34,6 +38,7 @@
   const toolbar = byId('toolbar');
   const numberFormat = byId('number-format');
   const fillHandle = byId('fill-handle');
+  const nameBox = byId('name-box');
 
   const borderSelect = byId('border');
 
@@ -120,12 +125,12 @@
   function paintCell(td, col, row) {
     const key = refKey(col, row);
     const value = sheet.value(key);
-    const style = sheet.style(key);
+    const style = sheet.shownStyle(key);
     const isRedNegative = style.negativeRed && typeof value === 'number' && value < 0;
     const isLeftAlignedText = typeof value === 'string' && value !== '' && (style.align ?? 'left') === 'left';
     td.textContent = formatValue(value, style);
-    td.classList.remove('spilling', 'covered');
-    td.title = '';
+    td.classList.remove('spilling', 'covered', 'query', 'query-result');
+    td.title = value instanceof FormulaError ? value.detail ?? '' : '';
     td.classList.toggle('num', typeof value === 'number');
     td.classList.toggle('err', value instanceof FormulaError);
     Object.assign(td.style, {
@@ -135,6 +140,7 @@
       textAlign: style.align ?? '',
       color: isRedNegative ? NEGATIVE_COLOR : style.color ?? '',
       backgroundColor: style.fill ?? '',
+      boxShadow: '',
       ...borderStyles(style.border),
     });
     if (isLeftAlignedText) spillText(td, col, row);
@@ -172,6 +178,118 @@
     }
   }
 
+  // ---------- names ----------
+
+  const namesHere = () => book.allNames().filter((area) => area.sheet === sheet);
+  const addressOf = (area) => (area.sheet === sheet ? '' : sheetPrefix(book.nameOf(area.sheet))) + areaText(area);
+
+  /** The named area that is exactly the selection, if any. */
+  function selectedName() {
+    const { col1, col2, row1, row2 } = selectionBounds();
+    return namesHere().find(({ from, to }) => from.col === col1 && from.row === row1 && to.col === col2 && to.row === row2);
+  }
+
+  /** A thin line around an area, added to the lines its cells already have. */
+  function outline({ from, to }, colour) {
+    for (let row = from.row; row <= Math.min(to.row, ROWS - 1); row++) {
+      for (let col = from.col; col <= Math.min(to.col, COLS - 1); col++) {
+        const edges = [row === from.row && '0 1px', row === to.row && '0 -1px', col === from.col && '1px 0', col === to.col && '-1px 0'];
+        const lines = edges.filter(Boolean).map((offset) => `inset ${offset} 0 0 ${colour}`);
+        addShadow(cellElements[row][col], ...lines);
+      }
+    }
+  }
+
+  function addShadow(td, ...shadows) {
+    td.style.boxShadow = [td.style.boxShadow, ...shadows].filter(Boolean).join(', ');
+  }
+
+  /**
+   * Makes queries stand out: the cell that holds a query is tinted and has a bar on its left, the cells
+   * its result fills are tinted lighter, and a line runs around the whole. A result cell says in its
+   * tooltip where its query is.
+   */
+  function renderQueries() {
+    for (const area of sheet.queryAreas()) {
+      outline(area, QUERY_OUTLINE);
+      for (let row = area.from.row; row <= Math.min(area.to.row, ROWS - 1); row++) {
+        for (let col = area.from.col; col <= Math.min(area.to.col, COLS - 1); col++) markQueryCell(cellElements[row][col], refKey(col, row), area.key);
+      }
+    }
+  }
+
+  function markQueryCell(td, key, queryKey) {
+    const holdsQuery = key === queryKey;
+    td.classList.add(holdsQuery ? 'query' : 'query-result');
+    if (holdsQuery) addShadow(td, QUERY_BAR);
+    else if (td.title === '') td.title = resultHint(queryKey);
+  }
+
+  const resultHint = (queryKey) => `Result of the query in ${queryKey} - change the query there`;
+
+  /** The cell of the query whose result the active cell shows, when the active cell is not that cell itself. */
+  function queryBehindActiveCell() {
+    const queryKey = sheet.queryCellOf(activeKey());
+    return queryKey === activeKey() ? undefined : queryKey;
+  }
+
+  function renderNames() {
+    namesHere().forEach((area) => outline(area, NAME_OUTLINE));
+    const names = book.allNames();
+    byId('names-list').replaceChildren(...names.map((area) => Object.assign(document.createElement('option'), { value: area.name })));
+    byId('name-list').replaceChildren(...names.map((area) => {
+      const item = document.createElement('button');
+      item.dataset.name = area.name;
+      item.append(area.name, Object.assign(document.createElement('kbd'), { textContent: addressOf(area) }));
+      return item;
+    }));
+  }
+
+  /** Shows and selects an area { sheet, from, to }, switching to its sheet when needed. */
+  function goTo(area) {
+    book.select(book.sheets.indexOf(area.sheet));
+    sheet = book.active;
+    anchor = { col: clamp(area.from.col, COLS - 1), row: clamp(area.from.row, ROWS - 1) };
+    focus = { col: clamp(area.to.col, COLS - 1), row: clamp(area.to.row, ROWS - 1) };
+    save();
+    render();
+    cellElements[anchor.row][anchor.col].scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  /** The area a typed text points at: a name, or an address such as B7, A1:C3 or Sheet2!A1; undefined when it is neither. */
+  function areaTyped(text) {
+    const named = book.named.get(text.toLowerCase());
+    if (named) return named;
+    const address = parseArea(text);
+    const target = address && (address.sheet === undefined ? sheet : book.find(address.sheet));
+    return target ? { ...address, sheet: target } : undefined;
+  }
+
+  function nameSelection(name) {
+    const { col1, col2, row1, row2 } = selectionBounds();
+    attempt(() => book.defineName(name, sheet, { from: { col: col1, row: row1 }, to: { col: col2, row: row2 } }));
+  }
+
+  /** Enter in the name box: go to the name or address typed, or give the selected cells the new name. */
+  function onNameBoxKey(event) {
+    if (event.key === 'Escape') grid.focus(); // leaving the box puts back what it showed
+    if (event.key !== 'Enter') return;
+    const text = nameBox.value.trim();
+    const area = areaTyped(text);
+    if (area) goTo(area); else if (text !== '') nameSelection(text);
+    grid.focus();
+  }
+
+  function askNameForSelection() {
+    const name = prompt('Name for the selected cells (one word; use it in formulas, e.g. =SUM(name))', selectedName()?.name ?? '')?.trim();
+    if (name) nameSelection(name);
+  }
+
+  function deleteSelectedName() {
+    const area = selectedName();
+    if (area) mutate(() => book.deleteName(area.name)); else alert('The selected cells have no name. Pick a name in the Names menu first: that selects its cells.');
+  }
+
   function render() {
     for (let row = 0; row < ROWS; row++) {
       for (let col = 0; col < COLS; col++) paintCell(cellElements[row][col], col, row);
@@ -179,6 +297,8 @@
     }
     renderWidths();
     renderOverflow();
+    renderNames();
+    renderQueries();
     renderTabs();
     renderSelection();
   }
@@ -267,8 +387,9 @@
     marked = cells.map(({ col, row }) => cellElements[row][col]);
     marked.forEach((td) => td.classList.add('sel'));
     cellElements[anchor.row][anchor.col].classList.add('active');
-    byId('name-box').value = activeKey();
+    nameBox.value = selectedName()?.name ?? activeKey();
     formulaBar.value = sheet.raw(activeKey());
+    formulaBar.placeholder = queryBehindActiveCell() ? resultHint(queryBehindActiveCell()) : '';
     placeFillHandle();
     renderToolbar();
     renderStatus(cells);
@@ -403,7 +524,14 @@
 
   // ---------- editing ----------
 
+  /** Opening a cell that only shows part of a query result (F2, double-click) opens the query itself. */
   function startEdit(initialText) {
+    const queryKey = queryBehindActiveCell();
+    const isOpening = initialText === undefined;
+    if (queryKey && isOpening) {
+      const { col, row } = parseRef(queryKey);
+      moveTo(col, row);
+    }
     const td = cellElements[anchor.row][anchor.col];
     editing = true;
     replacing = initialText !== undefined;
@@ -595,13 +723,16 @@
     return lines.slice(0, lastRow + 1).map((fields) => csvLine(fields.slice(0, lastCol + 1))).join('\r\n');
   }
 
-  /** A .csv file arrives as a new sheet named after the file; anything else must be a saved workbook. */
+  // How the rows of each kind of table file are read; a .tsv keeps formulas as formulas.
+  const ROW_READERS = { csv: parseCsv, tsv: (text) => rowsOfText(text).map((cells) => cells.map((cell) => cell.raw)) };
+
+  /** A .csv or .tsv file arrives as a new sheet named after the file; anything else must be a saved workbook. */
   async function openFile(file) {
     const text = await file.text();
-    const isCsv = CSV_FILE.test(file.name);
+    const kind = TABLE_FILE.exec(file.name)?.[1].toLowerCase();
     const before = book.serialize();
     try {
-      mutate(() => (isCsv ? importCsv(file.name, text) : book.load(text)));
+      mutate(() => (kind ? importRows(file.name, ROW_READERS[kind](text)) : book.load(text)));
     } catch (error) {
       undoStack.pop();
       book.load(before);
@@ -611,16 +742,22 @@
     }
   }
 
-  function importCsv(fileName, text) {
-    const base = fileName.replace(CSV_FILE, '').replace(/['!"]/g, '_').trim() || 'csv';
+  function importRows(fileName, rows) {
+    const base = fileName.replace(TABLE_FILE, '').replace(/['!"]/g, '_').trim() || 'csv';
     const target = book.add(book.find(base) ? book.freeName(base + ' ') : base);
-    parseCsv(text).forEach((fields, row) => fields.forEach((raw, col) => target.setRaw(refKey(col, row), raw)));
+    rows.forEach((fields, row) => fields.forEach((raw, col) => target.setRaw(refKey(col, row), raw)));
     selectFirstCell();
   }
 
   function openDemo() {
     selectFirstCell();
     mutate(() => book.load(DEMO));
+  }
+
+  /** The sheet shown as tab separated text with formulas kept as formulas: the text a copy of the whole used area gives. */
+  function toTsv() {
+    const { lastRow, lastCol } = sheet.usedRange();
+    return copyBlock({ col1: 0, row1: 0, col2: Math.max(lastCol, 0), row2: Math.max(lastRow, 0) }).text;
   }
 
   function newBook() {
@@ -842,6 +979,9 @@
     'open-file': () => byId('file-input').click(),
     'save-file': () => download('workbook.json', book.serialize(), 'application/json'),
     'export-csv': () => download('sheet.csv', toCsv(), 'text/csv'),
+    'export-tsv': () => download('sheet.tsv', toTsv(), 'text/tab-separated-values'),
+    'name-selection': askNameForSelection,
+    'delete-name': deleteSelectedName,
   };
 
   function onToolbarClick(event) {
@@ -851,8 +991,9 @@
       toggleMenu(button.parentElement);
       return;
     }
-    const { toggle, align, decimals } = button.dataset;
+    const { toggle, align, decimals, name } = button.dataset;
     if (toggle) toggleStyle(toggle);
+    else if (name) goTo(book.named.get(name.toLowerCase()));
     else if (align) applyStyle({ align: sheet.style(activeKey()).align === align ? undefined : align });
     else if (decimals) changeDecimals(Number(decimals));
     else BUTTON_ACTIONS[button.id]();
@@ -878,6 +1019,9 @@
     editor.addEventListener('keydown', onEditorKey);
     editor.addEventListener('blur', () => finishEdit(true));
     formulaBar.addEventListener('keydown', onFormulaBarKey);
+    nameBox.addEventListener('keydown', onNameBoxKey);
+    nameBox.addEventListener('focus', () => nameBox.select());
+    nameBox.addEventListener('blur', renderSelection);
     formulaBar.addEventListener('change', () => setActiveRaw(formulaBar.value));
     toolbar.addEventListener('click', onToolbarClick);
     toolbar.addEventListener('change', closeMenus); // a choice was made in a list, colour or tick box of a menu

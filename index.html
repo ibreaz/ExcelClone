@@ -12,12 +12,13 @@
       <button class="menu-title">File</button>
       <div class="menu-items">
         <button id="new-sheet">New workbook</button>
-        <button id="open-file" title="A workbook saved from here (.json), or a .csv file, which arrives as a new sheet">Open file (.json or .csv)...</button>
+        <button id="open-file" title="A workbook saved from here (.json), or a .csv or .tsv file, which arrives as a new sheet">Open file (.json, .csv, .tsv)...</button>
         <button id="save-file" title="Downloads all sheets with formulas and formatting">Save to file</button>
-        <button id="export-csv" title="Downloads the values of the sheet shown">Export this sheet as CSV</button>
+        <button id="export-csv" title="Downloads the values of the sheet shown">Export this sheet as CSV (values)</button>
+        <button id="export-tsv" title="Downloads the sheet shown as tab separated text, formulas as formulas">Export this sheet as TSV (formulas)</button>
         <hr>
         <button id="open-demo" title="A workbook that shows every feature and lists the limits">Open the demo workbook</button>
-        <input type="file" id="file-input" accept=".json,.csv">
+        <input type="file" id="file-input" accept=".json,.csv,.tsv">
       </div>
     </div>
     <div class="menu">
@@ -75,6 +76,16 @@
       </div>
     </div>
     <div class="menu">
+      <button class="menu-title">Names</button>
+      <div class="menu-items">
+        <button id="name-selection" title="The same as typing a name in the box left of fx">Name the selected cells...</button>
+        <button id="delete-name">Remove the name of the selected cells</button>
+        <hr>
+        <span class="menu-note">Go to (use a name in a formula: =SUM(name))</span>
+        <div id="name-list"></div>
+      </div>
+    </div>
+    <div class="menu">
       <button class="menu-title">Sheet</button>
       <div class="menu-items">
         <button id="menu-add-sheet">New sheet</button>
@@ -99,7 +110,8 @@
     </div>
   </div>
   <div class="bar">
-    <input id="name-box" readonly tabindex="-1">
+    <input id="name-box" list="names-list" spellcheck="false" autocomplete="off" title="Type a name and press Enter to name the selected cells. Type a name or a cell (B7, A1:C3) to go there.">
+    <datalist id="names-list"></datalist>
     <span>fx</span>
     <input id="formula-bar" spellcheck="false" autocomplete="off">
   </div>
@@ -115,6 +127,7 @@
   <div class="bar" id="status"></div>
   <script src="demo/all-features.js"></script>
   <script src="js/formula.js"></script>
+  <script src="js/sql.js"></script>
   <script src="js/sheet.js"></script>
   <script src="js/format.js"></script>
   <script src="js/workbook.js"></script>

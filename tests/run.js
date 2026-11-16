@@ -2,6 +2,7 @@
 'use strict';
 const assert = require('assert');
 require('../js/formula.js');
+require('../js/sql.js');
 require('../js/sheet.js');
 require('../js/format.js');
 require('../js/workbook.js');
@@ -34,6 +35,25 @@ function bookOf(sheets) {
   return book;
 }
 
+const ORDERS = {
+  A1: 'nr', B1: 'client', C1: 'date', D1: 'amount',
+  A2: '1', B2: 'Acme', C2: '2026-01-05', D2: '1200',
+  A3: '2', B3: 'Borealis', C3: '2026-01-09', D3: '450',
+  A4: '3', B4: 'acme', C4: '2026-02-17', D4: '300',
+  A5: '4', B5: 'Cetus', C5: '2026-02-20', D5: '980',
+};
+
+/** A sheet with the ORDERS table at A1:D5 (amounts in euro) and one query at F1; returns the cells the query fills, as shown. */
+function queried(query, extraCells = {}) {
+  const sheet = sheetOf({ ...ORDERS, ...extraCells, F1: query });
+  ['D2', 'D3', 'D4', 'D5'].forEach((key) => sheet.setStyle(key, { format: 'eur' }));
+  const lines = [];
+  for (let row = 1; shown(sheet, 'F' + row) !== ''; row++) {
+    lines.push(['F', 'G', 'H', 'I'].map((column) => shown(sheet, column + row)).filter((text) => text !== '').join(' | '));
+  }
+  return lines;
+}
+
 function sheetOf(cells) {
   const sheet = new Sheet();
   for (const [key, raw] of Object.entries(cells)) sheet.setRaw(key, raw);
@@ -42,7 +62,7 @@ function sheetOf(cells) {
 
 /** The text a user would see in the cell. */
 function shown(sheet, key) {
-  return formatValue(sheet.value(key), sheet.style(key));
+  return formatValue(sheet.value(key), sheet.shownStyle(key));
 }
 
 const tests = {
@@ -167,12 +187,16 @@ const tests = {
     assert.deepStrictEqual(unused(Object.keys(BORDER_SIDES), (border) => cells.some((cell) => cell.style.border === border)), []);
     assert.ok(Object.keys(book.active.widths).length > 0, 'no resized column');
     assert.ok(book.find(demo.LIMITS).usedRange().lastRow > 3, 'no list of limits');
+    assert.ok(book.allNames().length >= 2 && book.allNames().some((area) => new RegExp(`\\b${area.name}\\b`, 'i').test(formulas)), 'no name used in a formula');
     assert.ok(book.sheets.length > 1 && /'[^']+'!/.test(formulas), 'no formula that uses a sheet with a space in its name');
     const printed = (isSet) => book.sheets.some((sheet) => isSet(sheet.print));
     assert.ok(printed((print) => print.landscape) && printed((print) => print.repeatHeader) && printed((print) => print.breaks.length > 0), 'a print setting is not shown');
   },
   'the demo shows every error code, and only in rows labelled as errors': () => {
-    const sheet = demoBook().find(demo.FEATURES);
+    const book = demoBook();
+    const sheet = book.find(demo.FEATURES);
+    const withErrors = book.names.filter((name) => [...book.find(name).cells.keys()].some((key) => book.find(name).value(key) instanceof FormulaError));
+    assert.deepStrictEqual(withErrors, [demo.FEATURES]);
     const errors = [...sheet.cells.keys()].filter((key) => sheet.value(key) instanceof FormulaError);
     const label = (key) => sheet.raw('A' + key.replace(/\D/g, ''));
     assert.deepStrictEqual(errors.filter((key) => !label(key).startsWith(demo.ERROR_LABEL)), []);
@@ -314,6 +338,108 @@ const tests = {
     for (const raws of [['5'], ['1', '2', '4'], ['1', '=A1+1'], ['Jan', 'Feb'], ['1', ''], ['2026-01-01', '5']]) {
       assert.strictEqual(seriesOf(raws), null, JSON.stringify(raws));
     }
+  },
+  'a name stands for a cell or a range in formulas, whatever the case it is typed in': () => {
+    const book = bookOf({ Year: { A1: '10', A2: '20', B1: '0.19', C1: '=SUM(amounts)*(1+Vat)', C2: '=Unknown+1' }, Other: { A1: '=VAT*100' } });
+    book.defineName('Amounts', book.active, { from: { col: 0, row: 0 }, to: { col: 0, row: 1 } });
+    book.defineName('Vat', book.active, { from: { col: 1, row: 0 }, to: { col: 1, row: 0 } });
+    assert.strictEqual(shown(book.active, 'C1'), '35.7');
+    assert.strictEqual(shown(book.find('Other'), 'A1'), '19');
+    assert.strictEqual(shown(book.active, 'C2'), '#NAME?');
+    book.active.setRaw('A2', '90');
+    assert.strictEqual(shown(book.active, 'C1'), '119');
+    book.deleteName('VAT');
+    assert.strictEqual(shown(book.active, 'C1'), '#NAME?');
+  },
+  'a name must be one word that cannot be read as a cell, and naming again moves the name': () => {
+    const book = bookOf({ Year: { A1: '1', B1: '2', C1: '=Rate' } });
+    const at = (col) => ({ from: { col, row: 0 }, to: { col, row: 0 } });
+    for (const bad of ['A1', 'tax2026', 'my name', 'TRUE', '9lives', '']) assert.throws(() => book.defineName(bad, book.active, at(0)), bad);
+    book.defineName('Rate', book.active, at(0));
+    book.defineName('rate', book.active, at(1));
+    assert.strictEqual(book.active.value('C1'), 2);
+    assert.deepStrictEqual(book.allNames().map((area) => area.name), ['rate']);
+  },
+  'names follow inserted and deleted rows, are saved with the workbook and go with their sheet': () => {
+    const book = bookOf({ Year: { A2: '10', A3: '20', A4: '30', C1: '=SUM(Costs)', D1: '=Jan!A1+Bonus' }, Jan: { A1: '5' } });
+    book.defineName('Costs', book.active, { from: { col: 0, row: 1 }, to: { col: 0, row: 3 } });
+    book.defineName('Bonus', book.find('Jan'), { from: { col: 0, row: 0 }, to: { col: 0, row: 0 } });
+    book.active.restructure(ROW, 0, 2);
+    book.active.restructure(ROW, 3, -1);
+    assert.strictEqual(book.active.value('C3'), 50);
+    const copy = new Workbook();
+    copy.load(book.serialize());
+    assert.deepStrictEqual(copy.areaNamed('costs'), { name: 'Costs', sheet: 'Year', from: { col: 0, row: 3 }, to: { col: 0, row: 4 } });
+    assert.strictEqual(copy.active.value('D3'), 10);
+    copy.active.restructure(ROW, 3, -2);
+    assert.strictEqual(copy.areaNamed('Costs'), undefined);
+    copy.remove(1);
+    assert.deepStrictEqual(copy.allNames(), []);
+  },
+  'a query result fills the cells beside and below it, with the number formats of its source columns': () => {
+    assert.deepStrictEqual(queried('=SQL("select client, date, amount from A1:D5 where amount >= 450 order by amount desc")'),
+      ['client | date | amount', 'Acme | 2026-01-05 | 1,200.00 €', 'Cetus | 2026-02-20 | 980.00 €', 'Borealis | 2026-01-09 | 450.00 €']);
+  },
+  'a query groups, totals and counts; text compares without case': () => {
+    assert.deepStrictEqual(queried('=SQL("select client, count(*) as orders, sum(amount) as total, avg(amount) from A1:D5 group by client order by total desc")'),
+      ['client | orders | total | avg(amount)', 'Acme | 2 | 1,500.00 € | 750.00 €', 'Cetus | 1 | 980.00 € | 980.00 €', 'Borealis | 1 | 450.00 € | 450.00 €']);
+    assert.deepStrictEqual(queried('=SQL("select count(*) as n, min(date) as first, max(amount) - min(amount) as spread from A1:D5 where client <> \'Cetus\'")'),
+      ['n | first | spread', '3 | 2026-01-05 | 900']);
+  },
+  'a query filters with AND, OR, NOT, LIKE, dates and values passed for ?': () => {
+    assert.deepStrictEqual(queried('=SQL("select nr from A1:D5 where date >= \'2026-02-01\' and not amount > 500 or client like \'bor%\'")'), ['nr', '2', '3']);
+    assert.deepStrictEqual(queried('=SQL("select nr, amount * 2 as double from A1:D5 where date < ? and client = ? limit 5", K1, "ACME")', { K1: '2026-02-01' }), ['nr | double', '1 | 2400']);
+    assert.deepStrictEqual(queried('=SQL("select distinct client from A1:D5 where nr > 2 order by 1 desc")'), ['client', 'Cetus', 'acme']);
+  },
+  'star gives every column, and a query over no rows still gives its column names and totals': () => {
+    assert.deepStrictEqual(queried('=SQL("select * from A1:D5 where nr = 2")'), ['nr | client | date | amount', '2 | Borealis | 2026-01-09 | 450.00 €']);
+    assert.deepStrictEqual(queried('=SQL("select nr from A1:D5 where nr > 99")'), ['nr']);
+    assert.deepStrictEqual(queried('=SQL("select count(*) as n, sum(amount) as total from A1:D5 where nr > 99")'), ['n | total', '0 | 0.00 €']);
+  },
+  'two named tables are joined, with table.column where a name is in both': () => {
+    const book = bookOf({ Data: { ...ORDERS, F1: 'client', G1: 'country', F2: 'Acme', G2: 'RO', F3: 'Cetus', G3: 'BE' }, Report: {} });
+    book.defineName('Orders', book.active, { from: { col: 0, row: 0 }, to: { col: 3, row: 9 } });
+    book.defineName('Clients', book.active, { from: { col: 5, row: 0 }, to: { col: 6, row: 2 } });
+    const report = book.find('Report');
+    report.setRaw('A1', '=SQL("select c.country, sum(o.amount) as total from Orders o join Clients c on o.client = c.client group by c.country order by total")');
+    assert.deepStrictEqual(['A1', 'B1', 'A2', 'B2', 'A3', 'B3', 'A4'].map((key) => shown(report, key)), ['c.country', 'total', 'BE', '980', 'RO', '1500', '']);
+    book.active.setRaw('D2', '5000');
+    assert.strictEqual(shown(report, 'B3'), '5300');
+    report.setRaw('D1', "=SQL(\"select count(*) as n from Data!A1:D5\")");
+    assert.strictEqual(shown(report, 'D2'), '4');
+  },
+  'a result with no room shows #SPILL!, and takes its place once the cell in the way is emptied': () => {
+    const sheet = sheetOf({ ...ORDERS, F1: '=SQL("select nr from A1:D5")', F3: 'in the way', H1: '=F2+1' });
+    assert.deepStrictEqual(['F1', 'F2', 'H1'].map((key) => shown(sheet, key)), ['#SPILL!', '', '1']);
+    sheet.setRaw('F3', '');
+    assert.deepStrictEqual(['F1', 'F2', 'F3', 'H1'].map((key) => shown(sheet, key)), ['nr', '1', '2', '2']);
+    assert.deepStrictEqual(sheet.usedRange(), { lastRow: 4, lastCol: 7 });
+  },
+  'a sheet tells where its queries are and which cells show their results': () => {
+    const sheet = sheetOf({ ...ORDERS, F1: '=SQL("select nr, client from A1:D5 where nr < 3")', F6: '=SQL("select nope from A1:D5")' });
+    assert.deepStrictEqual(sheet.queryAreas(), [
+      { key: 'F1', from: { col: 5, row: 0 }, to: { col: 6, row: 2 } },
+      { key: 'F6', from: { col: 5, row: 5 }, to: { col: 5, row: 5 } },
+    ]);
+    assert.deepStrictEqual(['F1', 'G3', 'F4', 'A1', 'F6'].map((key) => sheet.queryCellOf(key)), ['F1', 'F1', undefined, undefined, undefined]);
+  },
+  'a later query can read the result of an earlier one, and two results cannot overlap': () => {
+    const sheet = sheetOf({ ...ORDERS, F1: '=SQL("select client, amount from A1:D5 where amount > 400")', I1: '=SQL("select count(*) as big from F1:G9")', F4: '' });
+    assert.strictEqual(shown(sheet, 'I2'), '3');
+    sheet.setRaw('G3', '=SQL("select nr from A1:D5")');
+    assert.strictEqual(shown(sheet, 'F1'), '#SPILL!');
+  },
+  'a query that cannot be run shows #SQL! and says why': () => {
+    const reason = (query, cells) => sheetOf({ ...ORDERS, ...cells, F1: query }).value('F1').detail;
+    assert.match(reason('=SQL("select price from A1:D5")'), /no column "price"/);
+    assert.match(reason('=SQL("select nr from Nowhere")'), /no table "Nowhere"/);
+    assert.match(reason('=SQL("select nr from A1:D5 where")'), /end of the query/);
+    assert.match(reason('=SQL("select nr from A1:D5 where sum(amount) > 1")'), /cannot be used in WHERE/);
+    assert.match(reason('=SQL("select upper(client) from A1:D5")'), /Unknown function UPPER/);
+    assert.match(reason('=SQL("select nr from A1:D5 where nr = ?")'), /more \? than values/);
+    assert.match(reason('=SQL("select nr from A1:D5 order nr")'), /Expected BY/);
+    assert.strictEqual(shown(sheetOf({ ...ORDERS, F1: '=SQL("select nr from A1:D5") + 1' }), 'F1'), '#VALUE!');
+    assert.strictEqual(shown(sheetOf({ ...ORDERS, D3: '=1/0', F1: '=SQL("select nr from A1:D5")' }), 'F1'), '#DIV/0!');
   },
   'numbers are shown without floating point noise': () => {
     assert.strictEqual(shown(sheetOf({ A1: '=0.1+0.2' }), 'A1'), '0.3');

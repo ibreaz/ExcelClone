@@ -4,7 +4,7 @@ A small spreadsheet for basic accounting and basic formatting. Open `index.html`
 
 ## What it can do
 
-On a first start the page shows the demo workbook; after that it shows your own work, kept in the browser. Everything is in five menus: File, Edit, Format, Sheet and Print.
+On a first start the page shows the demo workbook; after that it shows your own work, kept in the browser. Everything is in six menus: File, Edit, Format, Names, Sheet and Print.
 
 Type numbers, text and formulas into a 26 x 100 grid, format the cells, copy formulas around, undo mistakes and save the sheet to a file. The sheet is also kept in the browser automatically, so it is still there after a reload.
 
@@ -15,11 +15,14 @@ Type numbers, text and formulas into a 26 x 100 grid, format the cells, copy for
 - `SUMIF(range, criterion, [sum range])` and `COUNTIF(range, criterion)`: the criterion is a number, a text (`"Food"`, upper/lower case ignored) or a comparison in quotes (`">100"`, `"<>Food"`). No wildcards.
 - Dates: type `2026-12-31` or `31.12.2026` and the cell becomes a date. Dates can be compared and subtracted (result in days), and days can be added; a formula that results in a date (a date plus days, `TODAY()`, `MAX` of dates...) is shown as a date by itself. `SUMIF`/`COUNTIF` take a date in the criterion: `">=2026-01-31"`.
 - Fill handle: drag the small square at the bottom-right corner of the selection in any direction to copy it, with formula references moving along. Two or more numbers with an even step continue as a series (1, 2 -> 3, 4), dates too, and a single date continues day by day.
-- Errors shown in the cell: `#DIV/0!`, `#NAME?` (unknown function), `#VALUE!` (text used as a number), `#CYCLE!` (formulas referring to each other), `#ERROR!` (formula cannot be read), `#REF!` (reference pushed off the sheet by a paste).
+- Errors shown in the cell: `#DIV/0!`, `#NAME?` (unknown function), `#VALUE!` (text used as a number), `#CYCLE!` (formulas referring to each other), `#ERROR!` (formula cannot be read), `#REF!` (reference pushed off the sheet by a paste), `#SPILL!` and `#SQL!` (see Queries).
 - Colours are applied while you pick them, so you see the result at once; the colour boxes in the Format menu show the colours of the active cell.
 - Formatting: bold, italic, underline, alignment, text and fill colour, number formats (thousands separator, EUR, USD, lei, percent, two date formats), more/fewer decimals, clear format.
 - Column widths: drag the right border of a column header; double-click it to fit the longest content. Widths are saved with the sheet and can be undone.
 - Rows and columns: click a header to select the whole row or column (Shift+click for several). The Edit menu inserts as many rows or columns as are selected, before the selection, or deletes the selected ones. Formulas keep pointing at the same data, a range shrinks when part of it is deleted, and a formula whose cell is deleted shows `#REF!`.
+- Names: select cells, type a name in the box left of `fx` and press Enter. Formulas then use the name: `=SUM(Amounts)`, `=Balance*19%`. Typing a name or an address (`B7`, `A1:C3`, `Sheet2!A1`) in that box goes there; the Names menu lists all names and removes one. Named areas have a thin outline, follow inserted and deleted rows, and are saved with the workbook.
+- Queries: `=SQL("select client, sum(amount) as total from Orders group by client order by total desc")`. A table is a named area or a typed one (`A3:D9`, `Sheet2!A3:D9`) whose first row holds the column names, so several tables fit on one sheet. The result fills the cells beside and below the formula, stays live, and keeps the number formats of its source columns. `?` in the query takes the values written after it: `=SQL("... where date >= ?", H13)`. Supported: columns and expressions, `AS`, `DISTINCT`, `JOIN ... ON`, `WHERE` with `AND OR NOT LIKE`, `GROUP BY`, `ORDER BY`, `LIMIT`, `SUM COUNT AVG MIN MAX`. On screen a query stands out in violet: the cell that holds it is darker with a bar on its left, the cells of its result are lighter, and a line runs around the whole. A result cell says in its tooltip and in the formula bar where its query is, and F2 or a double-click on it opens the query. `#SPILL!` means a filled cell is in the way of the result; `#SQL!` means the query cannot be run, and hovering the cell says why.
+- TSV with formulas: `File > Export this sheet as TSV` writes tab separated text with formulas kept as formulas, and `File > Open file` reads a `.tsv` back as a new sheet. Copy and paste use the same text, so cells copied here paste into a text editor (and back) with their formulas.
 - Long text: text wider than its cell runs on over the empty cells to its right and stops at the next filled (or coloured) cell. The grid lines under it are hidden. A number that does not fit shows `####` (hover to read it); centred or right-aligned text is cut at the cell edge.
 - Borders: the border list draws a line above, below, above and below, or a box around each selected cell. The `-1` button shows negative numbers in red.
 - Several sheets: tabs at the bottom; `+` adds a sheet; the Sheet menu copies, renames, deletes and moves the one shown. A formula uses another sheet as `Summary!B3` or `SUM(Jan!A1:A9)`, with quotes when the name is not a plain word: `'Year 2026'!B3`. Renaming a sheet updates the formulas that use it; deleting it leaves `#REF!` in them.
@@ -32,7 +35,7 @@ Type numbers, text and formulas into a 26 x 100 grid, format the cells, copy for
 
 ## Demo file with all features
 
-The demo workbook is what the page shows on a first start, and `File > Open the demo workbook` brings it back. `demo/all-features.json` is the same workbook as a file. It has three sheets: a small ledger with a demo of every feature, a summary that reads from it, and `Limits`, the list of everything the spreadsheet cannot do. It is generated, and the tests fail when it falls behind, so it always covers everything.
+The demo workbook is what the page shows on a first start, and `File > Open the demo workbook` brings it back. `demo/all-features.json` is the same workbook as a file. It has four sheets: a small ledger with a demo of every feature, a summary that reads from it, `Tables` with two named tables and live queries over them, and `Limits`, the list of everything the spreadsheet cannot do. It is generated, and the tests fail when it falls behind, so it always covers everything.
 
 ### Details
 
@@ -59,6 +62,9 @@ Each batch left the page working and added one group of features.
 - K7 - several sheets with references between them.
 - K8 - CSV import and print layout.
 - Text overflow - long text runs on over empty neighbours.
+- W1 - TSV export and import with formulas.
+- W2 - named cells and ranges.
+- W3 - SQL queries over named or typed areas, with results that fill the neighbouring cells.
 - K9 - fill handle continues series and fills in every direction.
 - K10 - automatic date format for date formulas; dates in `SUMIF`/`COUNTIF` criteria.
 - K11 - `####` for numbers that do not fit; no grid lines under overflowing text.
@@ -67,7 +73,7 @@ Each batch left the page working and added one group of features.
 
 ## How it is tested
 
-All three test sets pass: 42 model tests, 27 tests that drive the page in a simulated browser, and 23 checks in a real headless Chromium, which also saves pictures of the demo, an open menu and the print layout in `tests/out/`.
+All three test sets pass: 54 model tests, 32 tests that drive the page in a simulated browser, and 25 checks in a real headless Chromium, which also saves pictures of the demo, an open menu and the print layout in `tests/out/`.
 
 ### Details
 
@@ -78,12 +84,13 @@ All three test sets pass: 42 model tests, 27 tests that drive the page in a simu
 
 ## Code layout
 
-Seven small scripts, loaded in this order; only the last one touches the page.
+Eight small scripts, loaded in this order; only the last one touches the page.
 
 ### Details
 
 - `js/formula.js` - tokenizer, parser, evaluator, functions, reference shifting.
-- `js/sheet.js` - cell content and style, computed values, cycle detection, save/load.
+- `js/sql.js` - the query language: its own tokenizer, parser and executor.
+- `js/sheet.js` - cell content and style, computed values, query results laid out over cells, cycle detection, save/load.
 - `js/format.js` - number formats.
 - `js/workbook.js` - the named sheets and saving/loading them together.
 - `js/csv.js` - reading and writing CSV.

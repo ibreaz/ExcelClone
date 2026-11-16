@@ -127,7 +127,7 @@ async function dragFillHandleTo(page, ref) {
 // Checks on the demo workbook, which a first start shows.
 const demoTests = {
   'a first start shows the demo workbook': async (page) => {
-    assert.deepStrictEqual(await tabNames(page), ['Features', 'Summary 2026', 'Limits']);
+    assert.deepStrictEqual(await tabNames(page), ['Features', 'Summary 2026', 'Tables', 'Limits']);
     assert.strictEqual(await page.textContent(cell('D9')), '1,907.25 €');
   },
   'long text runs over its neighbours with no grid lines under it; a number too wide shows ####': async (page) => {
@@ -144,6 +144,36 @@ const demoTests = {
   'the other sheets open from their tabs and read from the first one': async (page) => {
     await page.click('#tab-list button:text-is("Summary 2026")');
     assert.strictEqual(await page.textContent(cell('B3')), '1,907.25 €');
+    await page.click('#tab-list button:text-is("Features")');
+  },
+  'the Tables sheet shows live query results, and they follow a changed number': async (page) => {
+    await page.click('#tab-list button:text-is("Tables")');
+    await page.screenshot({ path: path.join(OUT, 'tables.png') });
+    assert.deepStrictEqual(await Promise.all(['A15', 'B15', 'C15'].map((ref) => page.textContent(cell(ref)))), ['Acme', '3', '2,140.00 €']);
+    const [query, result, plain] = await Promise.all(['A14', 'B15', 'D15'].map((ref) => cssOf(page, ref, 'backgroundColor')));
+    assert.ok(new Set([query, result, plain]).size === 3, `the query, its result and other cells look the same: ${[query, result, plain]}`);
+    await page.dblclick(cell('B16'));
+    assert.match(await page.inputValue('#editor'), /^=SQL/);
+    await page.keyboard.press('Escape');
+    await enter(page, 'G4', ['2200']);
+    assert.strictEqual(await page.textContent(cell('C15')), '3,140.00 €');
+    await page.keyboard.press('Control+Z');
+    await page.click('#tab-list button:text-is("Features")');
+  },
+  'typing in the name box names the selection or goes to a name': async (page) => {
+    await page.fill('#name-box', 'Orders');
+    await page.press('#name-box', 'Enter');
+    assert.strictEqual(await page.textContent('#tab-list button.on'), 'Tables');
+    assert.ok(await page.locator('td.sel').count() > 20, 'the Orders area is not selected');
+    await page.click(cell('A4'));
+    await page.keyboard.press('Shift+ArrowRight');
+    await page.fill('#name-box', 'FirstClient');
+    await page.press('#name-box', 'Enter');
+    assert.strictEqual(await page.inputValue('#name-box'), 'FirstClient');
+    await openMenu(page, 'Names');
+    assert.ok((await page.textContent('#name-list')).includes('FirstClient'));
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Control+Z');
     await page.click('#tab-list button:text-is("Features")');
   },
   'printing: several pages, no menus or headers, and the screen is back to normal afterwards': async (page) => {
