@@ -33,6 +33,7 @@
   let marked = [];
   let dragging = false;
   let editing = false;
+  let replacing = false; // the edit was started by typing over the cell, not by F2 or a double-click
   let copied = null; // the last copy made here: { text, col, row, rows }
   const undoStack = [];
   const redoStack = [];
@@ -52,14 +53,16 @@
     head.appendChild(header(''));
     for (let col = 0; col < COLS; col++) {
       columnElements.push(columns.appendChild(document.createElement('col')));
-      const resizer = head.appendChild(header(colName(col))).appendChild(document.createElement('div'));
+      const th = head.appendChild(header(colName(col)));
+      th.dataset.col = col;
+      const resizer = th.appendChild(document.createElement('div'));
       resizer.className = 'resizer';
       resizer.dataset.col = col;
     }
     const body = table.createTBody();
     for (let row = 0; row < ROWS; row++) {
       const tr = body.insertRow();
-      tr.appendChild(header(row + 1));
+      tr.appendChild(header(row + 1)).dataset.row = row;
       cellElements.push([]);
       for (let col = 0; col < COLS; col++) {
         const td = tr.insertCell();
@@ -275,6 +278,7 @@
   function startEdit(initialText) {
     const td = cellElements[anchor.row][anchor.col];
     editing = true;
+    replacing = initialText !== undefined;
     editor.value = initialText ?? sheet.raw(activeKey());
     Object.assign(editor.style, {
       display: 'block',
@@ -293,13 +297,26 @@
     if (commit) setActiveRaw(editor.value);
   }
 
+  /**
+   * Where a key pressed in the editor confirms the edit and moves to, if it does. Enter and Tab always do
+   * (Shift reverses them). Arrows do after typing over a cell; after F2 or a double-click, left and right
+   * move the text cursor instead, so the content can be corrected.
+   */
+  function editorSteps(event) {
+    const sign = event.shiftKey ? -1 : 1;
+    const confirming = { Enter: [0, sign], Tab: [sign, 0] }[event.key];
+    if (confirming) return confirming;
+    const isVertical = event.key === 'ArrowUp' || event.key === 'ArrowDown';
+    return replacing || isVertical ? ARROWS[event.key] : undefined;
+  }
+
   function onEditorKey(event) {
-    const steps = { Enter: [0, 1], Tab: [1, 0] }[event.key];
+    const steps = editorSteps(event);
     if (!steps && event.key !== 'Escape') return;
     event.preventDefault();
     finishEdit(Boolean(steps));
     grid.focus();
-    if (steps) moveBy(...steps.map((step) => (event.shiftKey ? -step : step)));
+    if (steps) moveBy(...steps);
   }
 
   function onFormulaBarKey(event) {
@@ -424,11 +441,38 @@
     return td && { col: Number(td.dataset.col), row: Number(td.dataset.row) };
   }
 
+  /** The row or column header under the mouse, as { axis, index }. */
+  function headerAt(event) {
+    const th = event.target.closest('th');
+    if (!th || resizerColumn(event) !== null) return null;
+    const axis = ['col', 'row'].find((name) => th.dataset[name] !== undefined);
+    return axis ? { axis, index: Number(th.dataset[axis]) } : null;
+  }
+
+  /** Selects a whole row or column; with Shift, everything from the active cell's row or column to it. */
+  function selectHeader({ axis, index }, extend) {
+    const first = extend ? anchor[axis] : index;
+    const whole = axis === 'col' ? { from: { row: 0 }, to: { row: ROWS - 1 } } : { from: { col: 0 }, to: { col: COLS - 1 } };
+    anchor = { ...whole.from, [axis]: first };
+    focus = { ...whole.to, [axis]: index };
+    renderSelection();
+  }
+
+  /** Inserts (direction 1) as many rows or columns as are selected before the selection, or deletes (-1) the selected ones. */
+  function restructure(axis, direction) {
+    const bounds = selectionBounds();
+    const first = bounds[axis + '1'];
+    const count = bounds[axis + '2'] - first + 1;
+    mutate(() => sheet.restructure(axis, first, direction * count));
+  }
+
   function onMouseDown(event) {
     const cell = cellAt(event);
-    if (!cell) return;
+    const clickedHeader = headerAt(event);
+    if (!cell && !clickedHeader) return;
     // Commit a pending edit to the cell it belongs to, before the selection moves away from it.
     if (document.activeElement !== grid) document.activeElement.blur();
+    if (clickedHeader) { selectHeader(clickedHeader, event.shiftKey); return; }
     dragging = true;
     moveTo(cell.col, cell.row, event.shiftKey);
   }
@@ -476,6 +520,10 @@
 
   const BUTTON_ACTIONS = {
     'clear-format': () => forSelection((key) => sheet.clearStyle(key)),
+    'insert-row': () => restructure('row', 1),
+    'delete-row': () => restructure('row', -1),
+    'insert-col': () => restructure('col', 1),
+    'delete-col': () => restructure('col', -1),
     'undo': undo,
     'redo': redo,
     'new-sheet': newSheet,

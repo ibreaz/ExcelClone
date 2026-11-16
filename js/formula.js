@@ -242,20 +242,63 @@
     return args.length === 3 ? scalar(args[2]) : false;
   }
 
-  const REF_IN_FORMULA = /(?<![A-Za-z0-9_$])(\$?)([A-Za-z]{1,3})(\$?)(\d+)(?![A-Za-z0-9_(])/g;
+  const REF_PATTERN = String.raw`(\$?)([A-Za-z]{1,3})(\$?)(\d+)`;
+  // A reference or a whole range; groups 1-4 describe the first reference, 5 the colon, 6-9 the second one.
+  const REFS_IN_FORMULA = new RegExp(String.raw`(?<![A-Za-z0-9_$])${REF_PATTERN}(?:(\s*:\s*)${REF_PATTERN})?(?![A-Za-z0-9_(])`, 'g');
   const STRING_LITERAL = /("(?:[^"]|"")*")/;
+
+  const toRef = ([pinCol, letters, pinRow, digits]) => ({ pinCol, col: colIndex(letters), pinRow, row: Number(digits) - 1 });
+  const refText = (ref) => ref.pinCol + colName(ref.col) + ref.pinRow + (ref.row + 1);
+
+  /**
+   * Rewrites the references of a formula. rewrite gets the one reference, or the two ends of a range,
+   * and returns them changed, or null when they no longer point at anything (shown as #REF!).
+   */
+  function rewriteRefs(raw, rewrite) {
+    if (!raw.startsWith('=')) return raw;
+    const replace = (match, ...groups) => {
+      const isRange = groups[4] !== undefined;
+      const refs = [toRef(groups.slice(0, 4))].concat(isRange ? [toRef(groups.slice(5, 9))] : []);
+      const rewritten = rewrite(refs);
+      return rewritten === null ? ERRORS.REF : rewritten.map(refText).join(':');
+    };
+    const isLiteral = (index) => index % 2 === 1; // split keeps the captured string literals at odd positions
+    return raw.split(STRING_LITERAL).map((part, i) => (isLiteral(i) ? part : part.replace(REFS_IN_FORMULA, replace))).join('');
+  }
 
   /** Moves the relative references of a formula, as when it is copied to another cell; $ pins a column or row. */
   function shiftRefs(raw, dCol, dRow) {
-    if (!raw.startsWith('=')) return raw;
-    const shift = (match, pinCol, letters, pinRow, digits) => {
-      const col = colIndex(letters) + (pinCol ? 0 : dCol);
-      const row = Number(digits) - 1 + (pinRow ? 0 : dRow);
-      return col < 0 || row < 0 ? ERRORS.REF : pinCol + colName(col) + pinRow + (row + 1);
-    };
-    const isLiteral = (index) => index % 2 === 1; // split keeps the captured string literals at odd positions
-    return raw.split(STRING_LITERAL).map((part, i) => (isLiteral(i) ? part : part.replace(REF_IN_FORMULA, shift))).join('');
+    return rewriteRefs(raw, (refs) => {
+      const moved = refs.map((ref) => ({ ...ref, col: ref.col + (ref.pinCol ? 0 : dCol), row: ref.row + (ref.pinRow ? 0 : dRow) }));
+      return moved.some((ref) => ref.col < 0 || ref.row < 0) ? null : moved;
+    });
   }
 
-  root.XL = Object.assign(root.XL || {}, { ERRORS, FormulaError, colName, refKey, parse, evaluate, roundTo, shiftRefs });
+  /**
+   * Where a row or column index ends up after `count` rows/columns are inserted at `at` (count > 0)
+   * or removed from `at` on (count < 0). A removed index gives null, unless it is the low or high
+   * end of a range, which then shrinks to what is left.
+   */
+  function movedIndex(index, at, count, rangeEnd) {
+    if (index < at) return index;
+    const isRemoved = count < 0 && index < at - count;
+    if (!isRemoved) return index + count;
+    if (rangeEnd === 'low') return at;
+    return rangeEnd === 'high' ? at - 1 : null;
+  }
+
+  /** Keeps the references of a formula pointing at the same cells after rows or columns (axis 'row' | 'col') were inserted or removed. */
+  function restructureRefs(raw, axis, at, count) {
+    return rewriteRefs(raw, (refs) => {
+      const isRange = refs.length === 2;
+      const lowFirst = !isRange || refs[0][axis] <= refs[1][axis];
+      const endOf = (position) => (isRange ? ((position === 0) === lowFirst ? 'low' : 'high') : null);
+      const moved = refs.map((ref, position) => ({ ...ref, [axis]: movedIndex(ref[axis], at, count, endOf(position)) }));
+      const [low, high] = lowFirst ? moved : [moved[1], moved[0]];
+      const isGone = moved.some((ref) => ref[axis] === null) || (isRange && low[axis] > high[axis]);
+      return isGone ? null : moved;
+    });
+  }
+
+  root.XL = Object.assign(root.XL || {}, { ERRORS, FormulaError, colName, refKey, parse, evaluate, roundTo, shiftRefs, parseRef, movedIndex, restructureRefs });
 })(typeof window !== 'undefined' ? window : globalThis);

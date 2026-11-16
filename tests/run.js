@@ -5,6 +5,8 @@ require('../js/formula.js');
 require('../js/sheet.js');
 require('../js/format.js');
 const { Sheet, formatValue, shiftRefs } = globalThis.XL;
+const ROW = 'row';
+const COL = 'col';
 
 function sheetOf(cells) {
   const sheet = new Sheet();
@@ -68,6 +70,39 @@ const tests = {
     copy.load('[["B1",{"raw":"7","style":{}}]]');
     assert.strictEqual(copy.value('B1'), 7);
     assert.throws(() => copy.load('{"other":1}'));
+  },
+  'inserting a row moves the cells below it and formulas keep pointing at the same data': () => {
+    const sheet = sheetOf({ A1: '10', A2: '20', A3: '=SUM(A1:A2)', B1: '=$A$2*2' });
+    sheet.restructure(ROW, 1, 2);
+    assert.strictEqual(sheet.raw('A4'), '20');
+    assert.strictEqual(sheet.raw('A5'), '=SUM(A1:A4)');
+    assert.strictEqual(sheet.raw('B1'), '=$A$4*2');
+    assert.strictEqual(sheet.value('A5'), 30);
+  },
+  'deleting a row inside a summed range shrinks the range': () => {
+    const sheet = sheetOf({ A1: '10', A2: '20', A3: '30', A4: '=SUM(A1:A3)', B1: '=SUM(A3:A1)' });
+    sheet.restructure(ROW, 2, -1);
+    assert.strictEqual(sheet.raw('A3'), '=SUM(A1:A2)');
+    assert.strictEqual(sheet.raw('B1'), '=SUM(A2:A1)');
+    sheet.restructure(ROW, 0, -1);
+    assert.strictEqual(sheet.raw('A2'), '=SUM(A1:A1)');
+    assert.strictEqual(sheet.value('A2'), 20);
+  },
+  'deleting the cell or the whole range a formula uses shows #REF!': () => {
+    const sheet = sheetOf({ A1: '10', A2: '20', C1: '=A1+B5', C2: '=SUM(A1:A2)', C3: '=SUM(A1:B9)' });
+    sheet.restructure(COL, 0, -1);
+    assert.deepStrictEqual(['B1', 'B2', 'B3'].map((k) => sheet.raw(k)), ['=#REF!+A5', '=SUM(#REF!)', '=SUM(A1:A9)']);
+    assert.strictEqual(shown(sheet, 'B1'), '#ERROR!');
+  },
+  'inserting and deleting columns moves the column widths along': () => {
+    const sheet = sheetOf({ B1: 'x' });
+    sheet.setColWidth(1, 150);
+    sheet.restructure(COL, 0, 1);
+    assert.strictEqual(sheet.colWidth(2), 150);
+    assert.strictEqual(sheet.raw('C1'), 'x');
+    sheet.restructure(COL, 2, -1);
+    assert.strictEqual(sheet.colWidth(2), undefined);
+    assert.strictEqual(sheet.cells.size, 0);
   },
   'numbers are shown without floating point noise': () => {
     assert.strictEqual(shown(sheetOf({ A1: '=0.1+0.2' }), 'A1'), '0.3');

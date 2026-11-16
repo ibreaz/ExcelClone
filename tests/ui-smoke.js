@@ -31,14 +31,30 @@ function driver(window) {
     press: (name, extra) => key(grid, name, extra),
     /** Types into the active cell and confirms with Enter, which moves one cell down. */
     type(text) {
+      this.typeThen(text, 'Enter');
+    },
+    /** Types over the active cell and then presses the given key in the editor. */
+    typeThen(text, finalKey) {
       key(grid, text[0]);
       editor.value = text;
-      key(editor, 'Enter');
+      key(editor, finalKey);
+    },
+    /** Opens the active cell with F2, changes its text and presses the given key in the editor. */
+    correctThen(text, finalKey) {
+      key(grid, 'F2');
+      editor.value = text;
+      key(editor, finalKey);
     },
     click(ref, extra = {}) {
       this.cell(ref).dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, ...extra }));
       document.dispatchEvent(new window.MouseEvent('mouseup', { bubbles: true }));
     },
+    clickHeader(selector, extra = {}) {
+      document.querySelector(selector).dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, ...extra }));
+      document.dispatchEvent(new window.MouseEvent('mouseup', { bubbles: true }));
+    },
+    button: (id) => document.getElementById(id).click(),
+    selected: () => document.querySelectorAll('td.sel').length,
     copy: () => clip('copy'),
     paste: () => clip('paste'),
     choose(id, value) {
@@ -95,6 +111,55 @@ const tests = {
     ui.click('A1');
     ui.press('Delete');
     assert.strictEqual(ui.cell('A3').textContent, '250.50 €');
+  },
+  'after typing, an arrow key saves the cell and moves that way': (ui) => {
+    ui.click('E5');
+    ui.typeThen('7', 'ArrowRight');
+    assert.strictEqual(ui.cell('E5').textContent, '7');
+    assert.strictEqual(ui.value('name-box'), 'F5');
+    ui.typeThen('8', 'ArrowUp');
+    assert.strictEqual(ui.cell('F5').textContent, '8');
+    assert.strictEqual(ui.value('name-box'), 'F4');
+  },
+  'after F2, left and right stay in the cell for corrections, up and down save and move': (ui) => {
+    ui.click('E5');
+    ui.correctThen('70', 'ArrowLeft');
+    assert.strictEqual(ui.cell('E5').textContent, '7');
+    assert.strictEqual(ui.value('name-box'), 'E5');
+    ui.typeThen('', 'ArrowDown');
+    assert.strictEqual(ui.value('name-box'), 'E6');
+    ui.click('E5');
+    ui.press('Delete');
+    ui.click('F5');
+    ui.press('Delete');
+  },
+  'clicking a column or row header selects all of it, Shift+click several': (ui) => {
+    ui.clickHeader('th[data-col="1"]');
+    assert.strictEqual(ui.selected(), 100);
+    assert.strictEqual(ui.value('name-box'), 'B1');
+    ui.clickHeader('th[data-row="2"]');
+    ui.clickHeader('th[data-row="3"]', { shiftKey: true });
+    assert.strictEqual(ui.selected(), 52);
+  },
+  'inserting a row pushes the total down and it still adds up; deleting brings it back': (ui) => {
+    ui.click('A1');
+    ui.type('100');
+    ui.clickHeader('th[data-row="1"]');
+    ui.button('insert-row');
+    assert.strictEqual(ui.cell('A2').textContent, '');
+    assert.strictEqual(ui.cell('A4').textContent, '350.50 €');
+    ui.click('A4');
+    assert.strictEqual(ui.value('formula-bar'), '=SUM(A1:A3)');
+    ui.clickHeader('th[data-row="1"]');
+    ui.button('delete-row');
+    assert.strictEqual(ui.cell('A3').textContent, '350.50 €');
+  },
+  'deleting a column moves the next one into its place': (ui) => {
+    ui.clickHeader('th[data-col="0"]');
+    ui.button('delete-col');
+    assert.strictEqual(ui.cell('A3').textContent, '1.00 €');
+    ui.click('A3');
+    assert.strictEqual(ui.value('formula-bar'), '=SUM(A1:A2)');
   },
 };
 

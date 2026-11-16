@@ -2,7 +2,7 @@
 (function (root) {
   'use strict';
 
-  const { ERRORS, FormulaError, parse, evaluate, refKey } = root.XL;
+  const { ERRORS, FormulaError, parse, evaluate, refKey, parseRef, movedIndex, restructureRefs } = root.XL;
 
   class Sheet {
     constructor() {
@@ -38,6 +38,32 @@
     /** An undefined width puts the column back to the default. */
     setColWidth(col, width) {
       if (width === undefined) delete this.widths[col]; else this.widths[col] = width;
+    }
+
+    /**
+     * Inserts `count` empty rows or columns (axis 'row' | 'col') before index `at`, or removes -count
+     * of them from `at` on when count is negative. Cells, column widths and formulas follow.
+     */
+    restructure(axis, at, count) {
+      const moved = new Map();
+      for (const [key, cell] of this.cells) {
+        const position = parseRef(key);
+        position[axis] = movedIndex(position[axis], at, count);
+        if (position[axis] === null) continue;
+        moved.set(refKey(position.col, position.row), { ...cell, raw: restructureRefs(cell.raw, axis, at, count) });
+      }
+      this.cells = moved;
+      if (axis === 'col') this.widths = this.movedWidths(at, count);
+      this.cache.clear();
+    }
+
+    movedWidths(at, count) {
+      const widths = {};
+      for (const [col, width] of Object.entries(this.widths)) {
+        const target = movedIndex(Number(col), at, count);
+        if (target !== null) widths[target] = width;
+      }
+      return widths;
     }
 
     clearStyle(key) {
