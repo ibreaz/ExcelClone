@@ -1,0 +1,33 @@
+:root { --accent: #0b6e99; --line: #d8d8d8; --chrome: #f3f3f3; }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { display: flex; flex-direction: column; font: 13px/1.3 system-ui, sans-serif; color: #222; }
+
+.bar { display: flex; gap: 4px; align-items: center; padding: 4px 6px; background: var(--chrome); border-bottom: 1px solid #c8c8c8; }
+.bar button, .bar select, .bar input { font: inherit; height: 24px; }
+.bar button { min-width: 28px; border: 1px solid #bbb; border-radius: 3px; background: #fff; cursor: pointer; }
+.bar button.on { background: #cfe6f1; border-color: var(--accent); }
+.bar input[type=color] { width: 26px; padding: 0 1px; vertical-align: middle; }
+.bar input[type=file] { display: none; }
+.gap { width: 10px; }
+#name-box { width: 64px; text-align: center; }
+#formula-bar { flex: 1; }
+#status { min-height: 26px; justify-content: flex-end; gap: 18px; border-top: 1px solid #c8c8c8; border-bottom: 0; }
+
+#grid { flex: 1; overflow: auto; position: relative; outline: none; scroll-padding: 23px 0 0 44px; }
+table { border-collapse: separate; border-spacing: 0; table-layout: fixed; user-select: none; }
+th, td { height: 22px; padding: 0 4px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); white-space: nowrap; overflow: hidden; }
+td { cursor: cell; }
+th { position: sticky; z-index: 1; background: var(--chrome); color: #555; font-weight: normal; }
+thead th { top: 0; }
+tbody th { left: 0; }
+.resizer { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; }
+thead th:first-child { left: 0; z-index: 2; }
+
+td.num { text-align: right; }
+td.err { color: #b00020; }
+/* A translucent layer, so the fill colour of a selected cell stays visible. */
+td.sel { background-image: linear-gradient(rgba(11, 110, 153, .14), rgba(11, 110, 153, .14)); }
+td.active { outline: 2px solid var(--accent); outline-offset: -2px; background-image: none; }
+
+#editor { display: none; position: absolute; z-index: 3; padding: 0 3px; font: inherit; border: 2px solid var(--accent); outline: none; }

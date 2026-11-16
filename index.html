@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Sheet</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="bar" id="toolbar">
+    <button id="new-sheet" title="Start an empty sheet">New</button>
+    <button id="open-file" title="Open a sheet saved with Save">Open</button>
+    <button id="save-file" title="Download the sheet with formulas and formatting">Save</button>
+    <button id="export-csv" title="Download the values as CSV">CSV</button>
+    <input type="file" id="file-input" accept=".json">
+    <span class="gap"></span>
+    <button id="undo" title="Undo (Ctrl+Z)">&#8630;</button>
+    <button id="redo" title="Redo (Ctrl+Y)">&#8631;</button>
+    <span class="gap"></span>
+    <button data-toggle="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+    <button data-toggle="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+    <button data-toggle="underline" title="Underline (Ctrl+U)"><u>U</u></button>
+    <span class="gap"></span>
+    <button data-align="left" title="Align left">&#8676;</button>
+    <button data-align="center" title="Align center">&#8596;</button>
+    <button data-align="right" title="Align right">&#8677;</button>
+    <span class="gap"></span>
+    <select id="number-format" title="Number format">
+      <option value="general">General</option>
+      <option value="number">1,234.00</option>
+      <option value="eur">1,234.00 €</option>
+      <option value="usd">$1,234.00</option>
+      <option value="ron">1,234.00 lei</option>
+      <option value="percent">12%</option>
+    </select>
+    <button data-decimals="1" title="More decimals">.00+</button>
+    <button data-decimals="-1" title="Fewer decimals">.00&minus;</button>
+    <span class="gap"></span>
+    <label title="Text colour">A <input type="color" id="text-color" value="#000000"></label>
+    <label title="Fill colour">Fill <input type="color" id="fill-color" value="#ffffff"></label>
+    <button id="clear-format" title="Remove all formatting from the selection">Clear format</button>
+  </div>
+  <div class="bar">
+    <input id="name-box" readonly tabindex="-1">
+    <span>fx</span>
+    <input id="formula-bar" spellcheck="false" autocomplete="off">
+  </div>
+  <div id="grid" tabindex="0">
+    <table id="sheet"></table>
+    <input id="editor" spellcheck="false" autocomplete="off">
+  </div>
+  <div class="bar" id="status"></div>
+  <script src="js/formula.js"></script>
+  <script src="js/sheet.js"></script>
+  <script src="js/format.js"></script>
+  <script src="js/ui.js"></script>
+</body>
+</html>
