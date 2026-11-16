@@ -37,6 +37,8 @@
     return value;
   }
 
+  // Which sides of a cell each border choice draws a line on.
+  root.XL.BORDER_SIDES = { 'top': ['Top'], 'bottom': ['Bottom'], 'top-bottom': ['Top', 'Bottom'], 'box': ['Top', 'Right', 'Bottom', 'Left'] };
   root.XL.formatValue = formatValue;
   root.XL.NUMBER_FORMATS = [...Object.keys(DEFAULT_DECIMALS), ...Object.keys(DATE_FORMATS)];
   root.XL.DEFAULT_DECIMALS = DEFAULT_DECIMALS;

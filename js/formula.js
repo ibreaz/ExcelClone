@@ -33,8 +33,21 @@
     return { col: colIndex(match[1]), row: Number(match[2]) - 1 };
   }
 
-  // Groups: 1 number, 2 string, 3 cell reference, 4 name, 5 operator, 6 the mark left by a deleted reference.
-  const TOKEN = /\s*(?:(\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+)|"((?:[^"]|"")*)"|(\$?[A-Za-z]{1,3}\$?\d+)(?![A-Za-z0-9_(])|([A-Za-z_][A-Za-z0-9_]*)|(<=|>=|<>|[-+*\/^&=<>(),;:%])|(#REF!))/y;
+  const SIMPLE_SHEET_NAME = '[A-Za-z_][A-Za-z0-9_]*';
+  const QUOTED_SHEET_NAME = `'[^'!"]+'`;
+  // In front of a reference a sheet is written as Jan!A1, or as 'Year 2026'!A1 when its name is not a plain word.
+  const WRITTEN_SHEET_NAME = `${SIMPLE_SHEET_NAME}|${QUOTED_SHEET_NAME}`;
+
+  /** Any name will do, except one with ' ! or " (they would break the way formulas write it) or with spaces around it. */
+  const isSheetName = (name) => /^[^'!"]+$/.test(name) && name === name.trim();
+  const isSimpleSheetName = (name) => new RegExp(`^${SIMPLE_SHEET_NAME}$`).test(name);
+  const sheetPrefix = (name) => (isSimpleSheetName(name) ? name : `'${name}'`) + '!';
+  const unquoted = (writtenName) => writtenName.replace(/^'|'$/g, '');
+
+  // A cell reference may name its sheet (Sheet2!A1); `error` is the mark left by a deleted reference.
+  const TOKEN = new RegExp(String.raw`\s*(?:(?<number>\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+)|"(?<string>(?:[^"]|"")*)"`
+    + String.raw`|(?:(?<sheet>${WRITTEN_SHEET_NAME})!)?(?<ref>\$?[A-Za-z]{1,3}\$?\d+)(?![A-Za-z0-9_(])|(?<name>[A-Za-z_][A-Za-z0-9_]*)`
+    + String.raw`|(?<op><=|>=|<>|[-+*\/^&=<>(),;:%])|(?<error>#REF!))`, 'y');
 
   function tokenize(text) {
     const source = text.trimEnd();
@@ -43,18 +56,18 @@
     while (TOKEN.lastIndex < source.length) {
       const match = TOKEN.exec(source);
       if (!match) throw new FormulaError(ERRORS.SYNTAX);
-      tokens.push(toToken(match));
+      tokens.push(toToken(match.groups));
     }
     return tokens;
   }
 
-  function toToken(match) {
-    if (match[1] !== undefined) return { type: 'number', value: Number(match[1]) };
-    if (match[2] !== undefined) return { type: 'string', value: match[2].replace(/""/g, '"') };
-    if (match[3] !== undefined) return { type: 'ref', value: match[3] };
-    if (match[4] !== undefined) return { type: 'name', value: match[4].toUpperCase() };
-    if (match[6] !== undefined) return { type: 'error', value: ERRORS.REF };
-    return { type: 'op', value: match[5] };
+  function toToken(found) {
+    if (found.number !== undefined) return { type: 'number', value: Number(found.number) };
+    if (found.string !== undefined) return { type: 'string', value: found.string.replace(/""/g, '"') };
+    if (found.ref !== undefined) return { type: 'ref', value: found.ref, sheet: found.sheet && unquoted(found.sheet) };
+    if (found.name !== undefined) return { type: 'name', value: found.name.toUpperCase() };
+    if (found.error !== undefined) return { type: 'error', value: ERRORS.REF };
+    return { type: 'op', value: found.op };
   }
 
   // Lowest precedence first.
@@ -100,11 +113,11 @@
 
     function reference(token) {
       const from = parseRef(token.value);
-      if (!isOp(':')) return { type: 'ref', ...from };
+      if (!isOp(':')) return { type: 'ref', sheet: token.sheet, ...from };
       pos++;
       const end = tokens[pos++];
       if (!end || end.type !== 'ref') fail();
-      return { type: 'range', from, to: parseRef(end.value) };
+      return { type: 'range', sheet: token.sheet, from, to: parseRef(end.value) };
     }
 
     function named(name) {
@@ -137,6 +150,12 @@
   /** A number as text without binary noise such as 0.1 + 0.2 = 0.30000000000000004. */
   function plainNumber(value) {
     return String(Number(value.toPrecision(SIGNIFICANT_DIGITS)));
+  }
+
+  /** The number a typed text stands for, or null when it is not a number. */
+  function literalNumber(text) {
+    const trimmed = text.trim();
+    return trimmed !== '' && !Number.isNaN(Number(trimmed)) ? Number(trimmed) : null;
   }
 
   function toText(value) {
@@ -206,11 +225,11 @@
 
   const CRITERION = /^(<=|>=|<>|<|>|=)(.*)$/;
 
-  /** The test of a SUMIF/COUNTIF criterion such as 100, "Food", ">100" or "<>Food". Numbers match numbers, text matches text. */
+  /** The test of a SUMIF/COUNTIF criterion such as 100, "Food", ">100", "<>Food" or ">=2026-01-31". Numbers and dates match numbers, text matches text. */
   function criterionTest(criterion) {
     const [, operator = '=', operand = criterion] = (typeof criterion === 'string' && CRITERION.exec(criterion)) || [];
-    const isNumber = typeof operand === 'number' || (typeof operand === 'string' && operand.trim() !== '' && !Number.isNaN(Number(operand)));
-    const wanted = isNumber ? Number(operand) : toText(operand);
+    const typed = typeof operand === 'string' ? literalNumber(operand) ?? parseDate(operand)?.serial : null;
+    const wanted = typeof operand === 'number' ? operand : typed ?? toText(operand);
     return (value) => typeof value === typeof wanted && BINARY[operator](value, wanted);
   }
 
@@ -258,6 +277,34 @@
     return null;
   }
 
+  const DATE_FORMAT_NAMES = TYPED_DATES.map((typed) => typed.format);
+  const DATE_MAKERS = ['TODAY', 'DATE'];
+  const DATE_KEEPERS = ['MIN', 'MAX', 'IF']; // they give back one of their arguments
+  const IF_CONDITION_ARGS = 1;
+
+  /**
+   * The date format the result of a formula should be shown in, or null when the result is not a date.
+   * A date is: a date cell (dateFormatAt(col, row, sheetName) gives its format, or null), TODAY() or DATE(),
+   * a date plus or minus a number, or what MIN, MAX or IF pick among dates.
+   */
+  function dateFormatOf(node, dateFormatAt) {
+    const of = (child) => dateFormatOf(child, dateFormatAt);
+    if (node.type === 'ref') return dateFormatAt(node.col, node.row, node.sheet);
+    if (node.type === 'range') return dateFormatAt(node.from.col, node.from.row, node.sheet);
+    if (node.type === 'binary') return dateFormatOfSum(node.op, of(node.left), of(node.right));
+    if (node.type !== 'call') return null;
+    if (DATE_MAKERS.includes(node.name)) return DATE_FORMAT_NAMES[0];
+    if (!DATE_KEEPERS.includes(node.name)) return null;
+    const results = node.args.slice(node.name === 'IF' ? IF_CONDITION_ARGS : 0);
+    return results.map(of).find(Boolean) ?? null;
+  }
+
+  /** date + days and date - days are dates; date - date is a number of days, and date + date means nothing. */
+  function dateFormatOfSum(operator, left, right) {
+    if (operator === '+') return left && right ? null : left ?? right;
+    return operator === '-' && !right ? left : null;
+  }
+
   const extreme = (pick, numbers) => (numbers.length === 0 ? 0 : pick(...numbers));
 
   const FUNCTIONS = {
@@ -285,13 +332,13 @@
     const values = [];
     for (let row = Math.min(range.from.row, range.to.row); row <= Math.max(range.from.row, range.to.row); row++) {
       for (let col = Math.min(range.from.col, range.to.col); col <= Math.max(range.from.col, range.to.col); col++) {
-        values.push(getValue(col, row));
+        values.push(getValue(col, row, range.sheet));
       }
     }
     return values;
   }
 
-  /** getValue(col, row) returns the value of a cell, or throws its FormulaError. */
+  /** getValue(col, row, sheetName) returns the value of a cell, or throws its FormulaError; sheetName is undefined for the formula's own sheet. */
   function evaluate(node, getValue) {
     const scalar = (child) => {
       const value = evaluate(child, getValue);
@@ -301,7 +348,7 @@
     switch (node.type) {
       case 'literal': return node.value;
       case 'error': throw new FormulaError(node.code);
-      case 'ref': return getValue(node.col, node.row);
+      case 'ref': return getValue(node.col, node.row, node.sheet);
       case 'range': return rangeValues(node, getValue);
       case 'negate': return -toNumber(scalar(node.operand));
       case 'percent': return toNumber(scalar(node.operand)) / 100;
@@ -325,8 +372,8 @@
   }
 
   const REF_PATTERN = String.raw`(\$?)([A-Za-z]{1,3})(\$?)(\d+)`;
-  // A reference or a whole range; groups 1-4 describe the first reference, 5 the colon, 6-9 the second one.
-  const REFS_IN_FORMULA = new RegExp(String.raw`(?<![A-Za-z0-9_$])${REF_PATTERN}(?:(\s*:\s*)${REF_PATTERN})?(?![A-Za-z0-9_(])`, 'g');
+  // A reference or a whole range: group 1 is the sheet name as written, if given, 2-5 describe the first reference, 6 the colon, 7-10 the second one.
+  const REFS_IN_FORMULA = new RegExp(String.raw`(?<![A-Za-z0-9_$!])(?:(${WRITTEN_SHEET_NAME})!)?${REF_PATTERN}(?:(\s*:\s*)${REF_PATTERN})?(?![A-Za-z0-9_(])`, 'g');
   const STRING_LITERAL = /("(?:[^"]|"")*")/;
 
   const toRef = ([pinCol, letters, pinRow, digits]) => ({ pinCol, col: colIndex(letters), pinRow, row: Number(digits) - 1 });
@@ -334,18 +381,32 @@
 
   /**
    * Rewrites the references of a formula. rewrite gets the one reference, or the two ends of a range,
-   * and returns them changed, or null when they no longer point at anything (shown as #REF!).
+   * plus the sheet name written in front of them (undefined when there is none), and returns the
+   * references changed, or null when they no longer point at anything (shown as #REF!).
    */
   function rewriteRefs(raw, rewrite) {
-    if (!raw.startsWith('=')) return raw;
-    const replace = (match, ...groups) => {
+    const replace = (match, sheetName, ...groups) => { // sheetName as written, so with its quotes
       const isRange = groups[4] !== undefined;
       const refs = [toRef(groups.slice(0, 4))].concat(isRange ? [toRef(groups.slice(5, 9))] : []);
-      const rewritten = rewrite(refs);
-      return rewritten === null ? ERRORS.REF : rewritten.map(refText).join(':');
+      const rewritten = rewrite(refs, sheetName && unquoted(sheetName));
+      if (rewritten === null) return ERRORS.REF;
+      return (sheetName ? sheetName + '!' : '') + rewritten.map(refText).join(':');
     };
+    return outsideStrings(raw, (part) => part.replace(REFS_IN_FORMULA, replace));
+  }
+
+  /** Applies the change to a formula, leaving the text between double quotes alone; anything that is not a formula is returned as it is. */
+  function outsideStrings(raw, change) {
+    if (!raw.startsWith('=')) return raw;
     const isLiteral = (index) => index % 2 === 1; // split keeps the captured string literals at odd positions
-    return raw.split(STRING_LITERAL).map((part, i) => (isLiteral(i) ? part : part.replace(REFS_IN_FORMULA, replace))).join('');
+    return raw.split(STRING_LITERAL).map((part, i) => (isLiteral(i) ? part : change(part))).join('');
+  }
+
+  /** Follows a sheet that was renamed: Old!A1 becomes New!A1, or 'New name'!A1. */
+  function renameSheetRefs(raw, oldName, newName) {
+    const name = oldName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const prefix = new RegExp(`(?<![A-Za-z0-9_'])(?:'${name}'|${name})!`, 'gi');
+    return outsideStrings(raw, (part) => part.replace(prefix, () => sheetPrefix(newName)));
   }
 
   /** Moves the relative references of a formula, as when it is copied to another cell; $ pins a column or row. */
@@ -369,9 +430,15 @@
     return rangeEnd === 'high' ? at - 1 : null;
   }
 
-  /** Keeps the references of a formula pointing at the same cells after rows or columns (axis 'row' | 'col') were inserted or removed. */
-  function restructureRefs(raw, axis, at, count) {
-    return rewriteRefs(raw, (refs) => {
+  const hasNoSheetName = (sheetName) => sheetName === undefined;
+
+  /**
+   * Keeps the references of a formula pointing at the same cells after rows or columns (axis 'row' | 'col')
+   * were inserted or removed. pointsAtChangedSheet(sheetName) tells which references are about that sheet.
+   */
+  function restructureRefs(raw, axis, at, count, pointsAtChangedSheet = hasNoSheetName) {
+    return rewriteRefs(raw, (refs, sheetName) => {
+      if (!pointsAtChangedSheet(sheetName)) return refs;
       const isRange = refs.length === 2;
       const lowFirst = !isRange || refs[0][axis] <= refs[1][axis];
       const endOf = (position) => (isRange ? ((position === 0) === lowFirst ? 'low' : 'high') : null);
@@ -382,6 +449,6 @@
     });
   }
 
-  root.XL = Object.assign(root.XL || {}, { ERRORS, FormulaError, colName, refKey, parse, evaluate, roundTo, shiftRefs, parseRef, movedIndex, restructureRefs, parseDate, dateParts, plainNumber });
+  root.XL = Object.assign(root.XL || {}, { ERRORS, FormulaError, colName, refKey, parse, evaluate, roundTo, shiftRefs, parseRef, movedIndex, restructureRefs, parseDate, dateParts, plainNumber, isSheetName, renameSheetRefs, literalNumber, dateFormatOf, DATE_FORMAT_NAMES });
   root.XL.FUNCTION_NAMES = ['IF', ...Object.keys(FUNCTIONS)];
 })(typeof window !== 'undefined' ? window : globalThis);

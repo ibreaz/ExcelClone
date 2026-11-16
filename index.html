@@ -4,48 +4,99 @@
   <meta charset="utf-8">
   <title>Sheet</title>
   <link rel="stylesheet" href="style.css">
+  <style id="page-style"></style>
 </head>
 <body>
-  <div class="bar" id="toolbar">
-    <button id="new-sheet" title="Start an empty sheet">New</button>
-    <button id="open-file" title="Open a sheet saved with Save">Open</button>
-    <button id="save-file" title="Download the sheet with formulas and formatting">Save</button>
-    <button id="export-csv" title="Download the values as CSV">CSV</button>
-    <input type="file" id="file-input" accept=".json">
-    <span class="gap"></span>
-    <button id="undo" title="Undo (Ctrl+Z)">&#8630;</button>
-    <button id="redo" title="Redo (Ctrl+Y)">&#8631;</button>
-    <span class="gap"></span>
-    <button data-toggle="bold" title="Bold (Ctrl+B)"><b>B</b></button>
-    <button data-toggle="italic" title="Italic (Ctrl+I)"><i>I</i></button>
-    <button data-toggle="underline" title="Underline (Ctrl+U)"><u>U</u></button>
-    <span class="gap"></span>
-    <button data-align="left" title="Align left">&#8676;</button>
-    <button data-align="center" title="Align center">&#8596;</button>
-    <button data-align="right" title="Align right">&#8677;</button>
-    <span class="gap"></span>
-    <select id="number-format" title="Number format">
-      <option value="general">General</option>
-      <option value="number">1,234.00</option>
-      <option value="eur">1,234.00 €</option>
-      <option value="usd">$1,234.00</option>
-      <option value="ron">1,234.00 lei</option>
-      <option value="percent">12%</option>
-      <option value="date">2026-12-31</option>
-      <option value="date-dmy">31.12.2026</option>
-    </select>
-    <button data-decimals="1" title="More decimals">.00+</button>
-    <button data-decimals="-1" title="Fewer decimals">.00&minus;</button>
-    <span class="gap"></span>
-    <label title="Text colour">A <input type="color" id="text-color" value="#000000"></label>
-    <label title="Fill colour">Fill <input type="color" id="fill-color" value="#ffffff"></label>
-    <span class="gap"></span>
-    <button id="insert-row" title="Insert rows above the selection (as many as are selected)">+Row</button>
-    <button id="delete-row" title="Delete the selected rows">&minus;Row</button>
-    <button id="insert-col" title="Insert columns left of the selection (as many as are selected)">+Col</button>
-    <button id="delete-col" title="Delete the selected columns">&minus;Col</button>
-    <span class="gap"></span>
-    <button id="clear-format" title="Remove all formatting from the selection">Clear format</button>
+  <div class="menubar" id="toolbar">
+    <div class="menu">
+      <button class="menu-title">File</button>
+      <div class="menu-items">
+        <button id="new-sheet">New workbook</button>
+        <button id="open-file" title="A workbook saved from here (.json), or a .csv file, which arrives as a new sheet">Open file (.json or .csv)...</button>
+        <button id="save-file" title="Downloads all sheets with formulas and formatting">Save to file</button>
+        <button id="export-csv" title="Downloads the values of the sheet shown">Export this sheet as CSV</button>
+        <hr>
+        <button id="open-demo" title="A workbook that shows every feature and lists the limits">Open the demo workbook</button>
+        <input type="file" id="file-input" accept=".json,.csv">
+      </div>
+    </div>
+    <div class="menu">
+      <button class="menu-title">Edit</button>
+      <div class="menu-items">
+        <button id="undo">Undo <kbd>Ctrl+Z</kbd></button>
+        <button id="redo">Redo <kbd>Ctrl+Y</kbd></button>
+        <hr>
+        <button id="insert-row" title="As many rows as are selected">Insert rows above</button>
+        <button id="delete-row">Delete the selected rows</button>
+        <button id="insert-col" title="As many columns as are selected">Insert columns to the left</button>
+        <button id="delete-col">Delete the selected columns</button>
+      </div>
+    </div>
+    <div class="menu">
+      <button class="menu-title">Format</button>
+      <div class="menu-items">
+        <button data-toggle="bold">Bold <kbd>Ctrl+B</kbd></button>
+        <button data-toggle="italic">Italic <kbd>Ctrl+I</kbd></button>
+        <button data-toggle="underline">Underline <kbd>Ctrl+U</kbd></button>
+        <hr>
+        <button data-align="left">Align left</button>
+        <button data-align="center">Align centre</button>
+        <button data-align="right">Align right</button>
+        <hr>
+        <label>Number format
+          <select id="number-format">
+            <option value="general">General</option>
+            <option value="number">1,234.00</option>
+            <option value="eur">1,234.00 €</option>
+            <option value="usd">$1,234.00</option>
+            <option value="ron">1,234.00 lei</option>
+            <option value="percent">12%</option>
+            <option value="date">2026-12-31</option>
+            <option value="date-dmy">31.12.2026</option>
+          </select>
+        </label>
+        <button data-decimals="1">More decimals</button>
+        <button data-decimals="-1">Fewer decimals</button>
+        <button data-toggle="negativeRed">Negative numbers in <span class="negative">red</span></button>
+        <hr>
+        <label>Text colour <input type="color" id="text-color" value="#000000"></label>
+        <label>Fill colour <input type="color" id="fill-color" value="#ffffff"></label>
+        <label>Border
+          <select id="border">
+            <option value="none">None</option>
+            <option value="top">Line above</option>
+            <option value="bottom">Line below</option>
+            <option value="top-bottom">Above and below</option>
+            <option value="box">Box</option>
+          </select>
+        </label>
+        <hr>
+        <button id="clear-format">Clear formatting</button>
+      </div>
+    </div>
+    <div class="menu">
+      <button class="menu-title">Sheet</button>
+      <div class="menu-items">
+        <button id="menu-add-sheet">New sheet</button>
+        <button id="copy-sheet">Copy this sheet</button>
+        <button id="rename-sheet" title="Formulas that use the sheet follow the new name">Rename this sheet...</button>
+        <button id="delete-sheet">Delete this sheet</button>
+        <hr>
+        <button id="move-left">Move this sheet left</button>
+        <button id="move-right">Move this sheet right</button>
+      </div>
+    </div>
+    <div class="menu">
+      <button class="menu-title">Print</button>
+      <div class="menu-items">
+        <button id="print" title="Only the used part of the sheet shown is printed, without the grid">Print... <kbd>Ctrl+P</kbd></button>
+        <hr>
+        <span class="menu-note">Print settings of this sheet</span>
+        <label><input type="checkbox" id="landscape"> Print sideways (landscape)</label>
+        <label><input type="checkbox" id="repeat-header"> Repeat row 1 on every printed page</label>
+        <button id="page-break" title="Shown as a dashed line; choose it again to remove it">Start a new printed page at this row</button>
+      </div>
+    </div>
   </div>
   <div class="bar">
     <input id="name-box" readonly tabindex="-1">
@@ -54,13 +105,21 @@
   </div>
   <div id="grid" tabindex="0">
     <table id="sheet"></table>
-    <div id="fill-handle" title="Drag down or right to copy the selection"></div>
+    <div id="fill-handle" title="Drag in any direction to copy the selection or continue its series"></div>
     <input id="editor" spellcheck="false" autocomplete="off">
   </div>
+  <div class="bar" id="tabs">
+    <span id="tab-list"></span>
+    <button id="add-sheet" title="Add a sheet">+</button>
+  </div>
   <div class="bar" id="status"></div>
+  <script src="demo/all-features.js"></script>
   <script src="js/formula.js"></script>
   <script src="js/sheet.js"></script>
   <script src="js/format.js"></script>
+  <script src="js/workbook.js"></script>
+  <script src="js/csv.js"></script>
+  <script src="js/fill.js"></script>
   <script src="js/ui.js"></script>
 </body>
 </html>

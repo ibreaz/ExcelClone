@@ -1,6 +1,9 @@
 /*
- * Builds demo/all-features.json: one sheet that shows every feature, to open with the Open button.
- * After adding a feature, add a demo of it here and run: node demo/build-demo.js
+ * Builds the demo workbook, which shows every feature and lists every known limit:
+ * demo/all-features.json to open as a file, and demo/all-features.js, the same content as a script,
+ * which the page loads to show the demo on a first start (a page opened from disk cannot read a .json file).
+ * After adding a feature, add a demo of it here, bring LIMITS up to date (a limit that is gone is removed,
+ * a new one is added) and run: node demo/build-demo.js
  * (tests/run.js fails while a function, number format or kind of formatting is missing from the demo).
  */
 'use strict';
@@ -8,12 +11,17 @@ const fs = require('fs');
 const path = require('path');
 require('../js/formula.js');
 require('../js/sheet.js');
-const { Sheet } = globalThis.XL;
+require('../js/workbook.js');
+const { Workbook } = globalThis.XL;
 
 const DEMO_FILE = path.join(__dirname, 'all-features.json');
+const DEMO_SCRIPT = path.join(__dirname, 'all-features.js');
 const ERROR_LABEL = 'Error: ';
 const HEADING = { bold: true, fill: '#dbeef6' };
 const MONEY = { format: 'eur' };
+const FEATURES = 'Features';
+const SUMMARY = 'Summary 2026';
+const PAGE_BREAK_AT = 'Number formats'; // the section a new printed page starts with
 const SAMPLE = '1234567.891';
 const COLUMN_WIDTHS = [300, 170, 110, 110];
 const LEDGER_COLUMNS = ['A', 'B', 'C', 'D'];
@@ -62,7 +70,9 @@ const SECTIONS = [
     ['TODAY', '=TODAY()', { format: 'date' }],
     ['DATE from year, month, day', '=DATE(2026, 12, 31)', { format: 'date' }],
     ['Days between two dates', '=A8-A4'],
-    ['A date plus 30 days', '=A4+30', { format: 'date-dmy' }],
+    ['A date plus 30 days, shown day first', '=A4+30', { format: 'date-dmy' }],
+    ['A formula with a date is shown as a date by itself', '=A4+7'],
+    ['SUMIF with a date in the criterion', '=SUMIF(A4:A8, ">=2026-01-10", D4:D8)', MONEY],
     ['YEAR', '=YEAR(A4)'],
     ['MONTH', '=MONTH(A4)'],
     ['DAY', '=DAY(A4)'],
@@ -76,6 +86,7 @@ const SECTIONS = [
     ['Percent', '0.1925', { format: 'percent' }],
     ['More decimals', SAMPLE, { format: 'number', decimals: 4 }],
     ['Fewer decimals', SAMPLE, { format: 'eur', decimals: 0 }],
+    ['A number too wide for its cell shows #### (widen column B)', '123456789012345678', { format: 'number', decimals: 6 }],
   ]],
   ['Cell formatting', [
     ['Bold', 'Bold', { bold: true }],
@@ -87,6 +98,19 @@ const SECTIONS = [
     ['Text colour', 'red text', { color: '#c00000' }],
     ['Fill colour', 'yellow fill', { fill: '#fff2a8' }],
     ['Combined', '-1500', { bold: true, italic: true, color: '#c00000', fill: '#fde9e7', format: 'eur' }],
+    ['Long text runs on over the empty cells beside it', 'This text is longer than its cell and continues to the right until a filled cell'],
+  ]],
+  ['Borders and red negative numbers', [
+    ['Line above (a total)', '1907.25', { border: 'top', format: 'eur' }],
+    ['Line below', 'underlined cell', { border: 'bottom' }],
+    ['Lines above and below', '1907.25', { border: 'top-bottom', format: 'eur', bold: true }],
+    ['Box', 'boxed', { border: 'box', align: 'center' }],
+    ['Negative number in red', '-250', { negativeRed: true, format: 'eur' }],
+    ['The same format on a positive number', '250', { negativeRed: true, format: 'eur' }],
+  ]],
+  ['Several sheets (tabs at the bottom)', [
+    [`A cell of another sheet: '${SUMMARY}'!B3`, `='${SUMMARY}'!B3`, MONEY],
+    ['A range of another sheet', `=SUM('${SUMMARY}'!B4:B5)`, MONEY],
   ]],
   ['Errors (shown on purpose)', [
     [ERROR_LABEL + 'division by zero', '=1/0'],
@@ -98,34 +122,110 @@ const SECTIONS = [
   ]],
   ['Try it yourself', [
     ['Select D9 and drag the small square at its corner to the right: the formula is copied'],
-    ['Click row header 6, then +Row: the balance still adds up'],
+    ['Type 1 and 2 in two cells, select both and drag the square: 3, 4, 5 follow (up and left work too)'],
+    ['Drag the square of a date cell: the days follow one by one'],
+    ['Click row header 6, then Edit > Insert rows above: the balance still adds up'],
     ['Copy B13 (Ctrl+C), select a few cells, paste (Ctrl+V); undo with Ctrl+Z'],
     ['Drag the border between column headers to resize; double-click it to fit'],
     ['Select D4:D8 and read Sum, Average and Count at the bottom right'],
+    ['Open the other tab; Rename this sheet and see its formulas follow; Copy it; move it with the arrows'],
+    ['Print preview (Ctrl+P): row 1 is on every page and page 2 starts at Number formats (dashed line)'],
+    ['The other sheets print sideways (see their Print menu); File > New workbook starts empty'],
+    ['File > Open file, pick demo/sample.csv: it arrives as a new sheet'],
+    ['Print: only the used part of the sheet is printed, without the grid'],
   ]],
 ];
 
+const LIMITS = 'Limits';
+// Every known limit, as [area, limit]. Keep it current: it is the one list of limits (README and TODO point here).
+const LIMIT_ROWS = [
+  ['Size', 'Each sheet has 26 columns (A-Z) and 100 rows. Cells pushed past the edge by an insert are hidden, not lost.'],
+  ['Size', 'Row heights are fixed; there is no wrapped text and no merged cells.'],
+  ['Typing', 'Numbers use . for decimals and no thousands separator: 1234.5, not 1.234,5. Type =10% for a percentage.'],
+  ['Typing', 'Dates are typed as 2026-12-31 or 31.12.2026 only. There are no times of day.'],
+  ['Typing', 'References to another sheet are typed (Sheet2!A1); they cannot be picked with the mouse.'],
+  ['Formulas', 'Only the functions shown on the Features sheet. No text functions, no lookups.'],
+  ['Formulas', 'SUMIF and COUNTIF have no wildcards (* and ?).'],
+  ['Formulas', 'A formula gets its date format when it is entered; if the cells it uses become dates later, pick the format by hand.'],
+  ['Formulas', 'Every change recalculates the whole workbook: fine at this size.'],
+  ['Fill handle', 'Continues only even steps (1, 2, 3 or 10, 20, 30; dates by a fixed number of days). No month or weekday names.'],
+  ['Long content', 'Only left-aligned text runs over empty neighbours. A number that does not fit shows ####; hover to read it.'],
+  ['Formatting', 'One border style: a thin dark line. A border choice applies to every selected cell, not to the outline of the block.'],
+  ['Formatting', 'Currencies: euro, dollar and lei only. One font and one text size.'],
+  ['Sheets', "A sheet name cannot contain ' ! or \"."],
+  ['Clipboard', 'Copy puts formulas, not results, on the system clipboard. Paste from another program brings text only.'],
+  ['Files', 'Saves to this browser and to .json files. No .xlsx. CSV numbers with decimal commas arrive as text.'],
+  ['Print', 'Paper size and margins are chosen in the print dialog of the browser. Landscape is a hint that some browsers ignore.'],
+  ['Print', 'Only row 1 can repeat on every page.'],
+  ['Undo', 'The last 100 steps, forgotten when the page is reloaded.'],
+  ['Not there', 'Charts, sorting, filters, frozen panes, comments, find and replace, several users at once.'],
+];
+const LIMIT_WIDTHS = [110, 760];
+
+function buildLimits(sheet) {
+  const put = putter(sheet);
+  put('A1', 'Known limits - updated with every change', { bold: true });
+  put('A3', 'Area', HEADING);
+  put('B3', 'Limit', HEADING);
+  LIMIT_ROWS.forEach(([area, limit], index) => {
+    put('A' + (index + 4), area);
+    put('B' + (index + 4), limit);
+  });
+  LIMIT_WIDTHS.forEach((width, col) => sheet.setColWidth(col, width));
+  sheet.setPrintOption('landscape', true);
+}
+
+const SUMMARY_ROWS = [
+  ['Balance', `=${FEATURES}!D9`, { ...MONEY, bold: true, border: 'top-bottom' }],
+  ['Food', `=SUMIF(${FEATURES}!C4:C8, "Food", ${FEATURES}!D4:D8)`, { ...MONEY, negativeRed: true }],
+  ['Housing', `=SUMIF(${FEATURES}!C4:C8, "Housing", ${FEATURES}!D4:D8)`, { ...MONEY, negativeRed: true }],
+  ['Income', `=SUMIF(${FEATURES}!D4:D8, ">0")`, { ...MONEY, negativeRed: true }],
+];
+
+const putter = (sheet) => (key, raw, style) => {
+  sheet.setRaw(key, raw);
+  if (style) sheet.setStyle(key, style);
+};
+
+function buildSummary(sheet) {
+  const put = putter(sheet);
+  put('A1', `Summary - every number here comes from the ${FEATURES} sheet`, { bold: true });
+  SUMMARY_ROWS.forEach(([label, formula, style], index) => {
+    put('A' + (index + 3), label);
+    put('B' + (index + 3), formula, style);
+  });
+  sheet.setColWidth(1, COLUMN_WIDTHS[1]);
+  sheet.setPrintOption('landscape', true);
+}
+
 function build() {
-  const sheet = new Sheet();
-  const put = (key, raw, style) => {
-    sheet.setRaw(key, raw);
-    if (style) sheet.setStyle(key, style);
-  };
+  const book = new Workbook();
+  book.rename(0, FEATURES);
+  buildFeatures(book.active);
+  buildSummary(book.add(SUMMARY));
+  buildLimits(book.add(LIMITS));
+  book.select(0);
+  return book.serialize();
+}
+
+function buildFeatures(sheet) {
+  const put = putter(sheet);
   const headingRow = (row, titles) => LEDGER_COLUMNS.forEach((column, index) => put(column + row, titles[index] ?? '', HEADING));
 
-  put('A1', 'All features - a demo of each (open this file with the Open button)', { bold: true });
+  put('A1', 'All features - a demo of each (File > Open the demo workbook brings this back)', { bold: true });
   headingRow(LEDGER_FIRST_ROW - 1, ['Date', 'Description', 'Category', 'Amount']);
   LEDGER.forEach((entry, index) => {
     entry.forEach((raw, column) => put(LEDGER_COLUMNS[column] + (LEDGER_FIRST_ROW + index), raw));
-    sheet.setStyle('D' + (LEDGER_FIRST_ROW + index), MONEY);
+    sheet.setStyle('D' + (LEDGER_FIRST_ROW + index), { ...MONEY, negativeRed: true });
   });
   let row = LEDGER_FIRST_ROW + LEDGER.length;
   put('A' + row, 'Balance', { bold: true });
-  put('D' + row, `=SUM(D${LEDGER_FIRST_ROW}:D${row - 1})`, { ...MONEY, bold: true });
+  put('D' + row, `=SUM(D${LEDGER_FIRST_ROW}:D${row - 1})`, { ...MONEY, bold: true, border: 'top' });
 
   for (const [title, demos] of SECTIONS) {
     row += 2;
     headingRow(row, [title]);
+    if (title === PAGE_BREAK_AT) sheet.togglePageBreak(row - 1);
     for (const [label, content = '', style] of demos) {
       row += 1;
       put('A' + row, label);
@@ -133,12 +233,18 @@ function build() {
     }
   }
   COLUMN_WIDTHS.forEach((width, col) => sheet.setColWidth(col, width));
-  return sheet.serialize();
+  sheet.setPrintOption('repeatHeader', true);
+}
+
+/** The demo as a script that hands the workbook text to the page. */
+function buildScript() {
+  return `/* Generated by build-demo.js - do not edit. */\n(window.XL = window.XL || {}).DEMO = ${JSON.stringify(build())};\n`;
 }
 
 if (require.main === module) {
   fs.writeFileSync(DEMO_FILE, build());
-  console.log('written ' + DEMO_FILE);
+  fs.writeFileSync(DEMO_SCRIPT, buildScript());
+  console.log('written ' + DEMO_FILE + ' and ' + DEMO_SCRIPT);
 }
 
-module.exports = { build, DEMO_FILE, ERROR_LABEL };
+module.exports = { build, buildScript, DEMO_FILE, DEMO_SCRIPT, ERROR_LABEL, FEATURES, LIMITS };
